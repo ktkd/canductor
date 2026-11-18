@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "canductor"
+version = "0.1.0"
+description = "CANDuctor — CAN data collection microservice (Waveshare USB-CAN-A, stdlib-only)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "ktkd", email = "ktk@ktkd.ru" }]
+keywords = ["can", "waveshare", "usb-can"]
+dependencies = []
+classifiers = [
+    "Operating System :: POSIX",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: System :: Hardware",
+]
+
+[project.urls]
+Homepage = "https://ktkd.ru"
+Source = "https://github.com/ktkd/canductor"
+Issues = "https://github.com/ktkd/canductor/issues"
+
+[project.scripts]
+canductor = "canductor.cli:main"
+
+[tool.setuptools]
+packages = ["canductor", "canductor.core", "canductor.worker"]
+
+[tool.setuptools.package-data]
+"canductor" = ["web/index.html"]

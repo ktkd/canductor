@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# canductor-link — ad-hoc live dump of a single device (+ manual TX).
+# Usage:
+#   ./canductor-link                          # ttyUSB0, 500k, dump until Ctrl-C
+#   ./canductor-link --rate 125000 -s 0x123 01 02 03   # TX + dump
+#   ./canductor-link /dev/ttyUSB1 --var -t 10
+set -euo pipefail
+DEV="${1:-/dev/ttyUSB0}"
+if [[ "$DEV" == /dev/ttyUSB* || "$DEV" == /dev/serial* ]]; then
+  shift
+fi
+exec python3 -m canductor link "$DEV" "$@"

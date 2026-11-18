@@ -1,0 +1,2327 @@
+{
+ "name": "mazda_nd_dual_can",
+ "title": "CAN data collection: MX-5 ND (HS + MS CAN) — full scenario incl. DSC, cruise control and speed limiter",
+ "version": "1.2",
+ "cars": {
+  "nd": {
+   "label": "Mazda MX-5 ND 2019 (with DSC, cruise control, ASL limiter)"
+  }
+ },
+ "buses": {
+  "hs": {
+   "label": "HS-CAN 500 kbit/s (powertrain / chassis / cluster / EPS / ABS-DSC / Start-Stop)",
+   "can_baud": 500000,
+   "std_only": true,
+   "point": "OBD-II: pin 6 (CAN_H), pin 14 (CAN_L) — main chassis bus of MX-5 ND"
+  },
+  "ms": {
+   "label": "MS-CAN 125 kbit/s (body / HVAC / closures / switches)",
+   "can_baud": 125000,
+   "std_only": true,
+   "point": "BCM connector pins 2F (CAN_H) / 2H (CAN_L) — body bus of MX-5 ND; NOT present on OBD-II"
+  }
+ },
+ "rules": {
+  "quiet_s": 5,
+  "after_s": 5,
+  "repeats": 3,
+  "pause_s": 10,
+  "action_min_s": 5,
+  "action_max_s": 15,
+  "state_max_s": 120
+ },
+ "warnings": [
+  "Immobilizer MX-5 ND — without bypass/emulation, the engine will not start (critical).",
+  "EPS — in the swap RE, EPS was not working: need to emulate the PCM signal or replace with hydraulic (critical).",
+  "ABS/DSC — if the PCM signal is absent, they may be disabled: need to emulate torque (critical).",
+  "Start/Stop Unit MX-5 ND — will not start without emulating the stock PCM: this is an independent authentication loop.",
+  "Dual-bus capture: 'bus' lists every bus on which the action is expected to produce CAN traffic. HS-only actions (engine, transmission, motion, ABS, EPS, cluster, OBD, PCM-off) are logged on /dev/ttyUSB0. MS-only actions (windows, wipers, washer, mirrors, horn, HVAC controls, door modules) are logged on /dev/ttyUSB1. Actions touching BOTH buses (lock/unlock, ignition state, DSC button, cruise/ASL buttons, lighting, indicator lamps, HVAC on/off with engine compensation) must be logged on both adapters simultaneously, with a shared timebase.",
+  "Rule of thumb on ND: the BCM is the gateway. The switch/actuator lives on MS-CAN; the resulting state is mirrored to the cluster (HS-CAN) by the BCM. Without dual capture the emulator will miss one half of the pair.",
+  "Cruise / ASL: the wheel switches are MS-side; the status and set-speed bits live in the HS-side 0x165 (byte 13–14, together with gear). Confirm the bit layout by diff of stages 8 and 9 against the stage 1 baseline BEFORE using it in the emulator.",
+  "DSC/TCS button: press-behaviour (short press = DSC off, long press ≈ 10 s = switch-fault detection) is ND-specific; capture it verbatim. The button itself is BCM-side (MS), the resulting indicator is cluster-side (HS).",
+  "Handbrake / park brake: the mechanical lever switch is BCM-side (MS); the resulting cluster/DSC state is on HS. Capture both, then correlate by time."
+ ],
+ "known_ids": {
+  "nd": [
+   {
+    "id": "0x202",
+    "bus": "hs",
+    "params": [
+     {
+      "name": "RPM",
+      "bytes": "0-1",
+      "formula": "UINT16 / 4"
+     },
+     {
+      "name": "Vehicle speed",
+      "bytes": "2-3",
+      "formula": "INT16 / 360"
+     },
+     {
+      "name": "Accelerator",
+      "bytes": "6",
+      "formula": "UINT8 / 2.5"
+     }
+    ]
+   },
+   {
+    "id": "0x78",
+    "bus": "hs",
+    "params": [
+     {
+      "name": "Brake",
+      "bytes": "6",
+      "formula": "min(max(E+if(E<=146,255,0)-156,0)/2.34,100)"
+     }
+    ]
+   },
+   {
+    "id": "0x86",
+    "bus": "hs",
+    "params": [
+     {
+      "name": "Steering angle",
+      "bytes": "0-1",
+      "formula": "(16000 - UINT16) x 0.1"
+     }
+    ]
+   },
+   {
+    "id": "0x09A",
+    "bus": "hs",
+    "params": [
+     {
+      "name": "Lighting state",
+      "bytes": "0",
+      "formula": "confirm"
+     }
+    ]
+   },
+   {
+    "id": "0x165",
+    "bus": "hs",
+    "params": [
+     {
+      "name": "Gear state / cruise / ASL status",
+      "bytes": "13-14",
+      "formula": "confirm (see stage 8/9 diff)"
+     }
+    ]
+   },
+   {
+    "id": "0x720",
+    "bus": "hs",
+    "params": [
+     {
+      "name": "Instrument cluster (diagnostics)",
+      "bytes": "—",
+      "formula": "—"
+     }
+    ]
+   },
+   {
+    "id": "0x40A",
+    "bus": "hs",
+    "params": [
+     {
+      "name": "",
+      "bytes": "",
+      "formula": ""
+     }
+    ]
+   }
+  ]
+ },
+ "stages": [
+  {
+   "id": "0",
+   "title": "Equipment preparation and basic configuration (HS + MS)",
+   "checklist": [
+    "Connect HS-CAN: OBD-II pin 6 (CAN_H), pin 14 (CAN_L) -> /dev/ttyUSB0",
+    "Connect MS-CAN: BCM pin 2F (CAN_H), pin 2H (CAN_L) -> /dev/ttyUSB1",
+    "HS-CAN = 500 kbit/s (std, 11-bit ID); MS-CAN = 125 kbit/s (std, 11-bit ID)",
+    "Both logs share a single timebase (NTP/PTP or hardware trigger) — required for cross-bus correlation.",
+    "Rules: 5s quiet -> action 5-15s -> 5s after; each test x3; pause >=10s",
+    "ABS/DSC with speed — closed lot only",
+    "Any test whose 'bus' field contains 'ms' must not be run unless /dev/ttyUSB1 is up.",
+    "Any test whose 'bus' field is ['hs','ms'] must be run with BOTH adapters recording; a one-sided log is treated as invalid.",
+    "Vehicle is fitted with DSC, cruise control, ASL limiter — stages 8/9 must be executed while driving on the closed lot, not on a stand."
+   ],
+   "tests": []
+  },
+  {
+   "id": "1",
+   "title": "Baseline: passive listening of power states (both buses)",
+   "warn": "Record background traffic on BOTH buses and identify the list of active CAN IDs for each state. These logs are the reference for all later diffs.",
+   "tests": [
+    {
+     "id": "1.1.1",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "state",
+     "title": "Ignition off, all blocks de-energized",
+     "do": "Wait; control signals (if any)",
+     "duration": 30,
+     "file": "off",
+     "checks": [],
+     "tx": [],
+     "note": "MS-CAN may be silent or periodic (BCM sleep polling) — capture both."
+    },
+    {
+     "id": "1.1.2",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "state",
+     "title": "Ignition on, engine not started",
+     "do": "Immobilizer handshake, dashboard self-test, EPS, ABS; HVAC and BCM wake up on MS",
+     "duration": 60,
+     "file": "ign_on",
+     "checks": [],
+     "tx": []
+    },
+    {
+     "id": "1.1.3",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "state",
+     "title": "Engine idling (warm)",
+     "do": "PCM: RPM, temperature, fuel, load; cluster / OBD traffic; BCM/HVAC on MS",
+     "duration": 120,
+     "file": "idle",
+     "checks": [
+      "0x202"
+     ],
+     "tx": []
+    },
+    {
+     "id": "1.1.4",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "state",
+     "title": "Engine stopped, ignition off",
+     "do": "Record the shutdown sequence and sleep transitions on both buses",
+     "duration": 30,
+     "file": "shutdown",
+     "checks": [],
+     "tx": []
+    }
+   ]
+  },
+  {
+   "id": "2",
+   "title": "Access, locking and closures (both buses)",
+   "warn": "The ND keyless/central locking master is the Start/Stop Unit (HS) + BCM (MS). Capture the MS-side lock command and the HS-side cluster/StartStopU mirror simultaneously — the emulator needs the pair, not one half.",
+   "tests": [
+    {
+     "id": "2.1.1",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "action",
+     "title": "Unlock from door button",
+     "do": "Car closed, press the outside door button, then re-open and re-close the door",
+     "duration": 10,
+     "file": "unlock_door_btn",
+     "checks": [],
+     "note": "MS: BCM lock actuator command. HS: StartStopU key-present + cluster door-ajar mirror."
+    },
+    {
+     "id": "2.1.2",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "action",
+     "title": "Re-lock from door button",
+     "do": "Press the lock button on the door",
+     "duration": 10,
+     "file": "lock_door_btn",
+     "checks": []
+    },
+    {
+     "id": "2.1.3",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "action",
+     "title": "Unlock from key fob",
+     "do": "Press the unlock button on the remote",
+     "duration": 10,
+     "file": "unlock_fob",
+     "checks": [],
+     "note": "HS: StartStopU RKE frame. MS: BCM lock actuation."
+    },
+    {
+     "id": "2.1.4",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "action",
+     "title": "Re-lock from key fob",
+     "do": "Press the lock button on the remote",
+     "duration": 10,
+     "file": "lock_fob",
+     "checks": []
+    },
+    {
+     "id": "2.1.5",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "action",
+     "title": "Unlock / open from interior handle",
+     "do": "Open the door from the inside handle",
+     "duration": 10,
+     "file": "unlock_interior",
+     "checks": []
+    },
+    {
+     "id": "2.1.6",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "action",
+     "title": "Lock from interior lock button",
+     "do": "Press the interior lock button, then open/close the door",
+     "duration": 10,
+     "file": "lock_interior",
+     "checks": []
+    },
+    {
+     "id": "2.1.7",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "action",
+     "title": "Passenger door: open/close",
+     "do": "Repeat the same open/close/lock cycle for the passenger side",
+     "duration": 10,
+     "file": "door_passenger",
+     "checks": []
+    },
+    {
+     "id": "2.1.8",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "action",
+     "title": "Trunk: open from fob / close",
+     "do": "Open the trunk from the remote, then close it",
+     "duration": 10,
+     "file": "trunk",
+     "checks": [],
+     "note": "MS: BCM trunk actuator + ajar switch. HS: cluster ajar mirror."
+    },
+    {
+     "id": "2.1.9",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "action",
+     "title": "Fuel lid: open/close",
+     "do": "Open and close the fuel filler lid",
+     "duration": 10,
+     "file": "fuel_lid",
+     "checks": []
+    }
+   ]
+  },
+  {
+   "id": "3",
+   "title": "Power states, start, immobilizer and i-stop (both buses)",
+   "warn": "Start loop includes immobilizer exchange (PCM <-> Start/Stop Unit) on HS and BCM wake-up on MS. i-stop OFF button is MS-side; i-stop status is PCM/cluster (HS).",
+   "tests": [
+    {
+     "id": "3.1.1",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "action",
+     "title": "ACC on (start button without brake, once)",
+     "do": "Start button, no brake pedal: ACC power, engine off",
+     "duration": 10,
+     "file": "acc_on",
+     "checks": [],
+     "tx": []
+    },
+    {
+     "id": "3.1.2",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "action",
+     "title": "ACC -> OFF (start button without brake, again)",
+     "do": "Same button, no brake: returns to OFF",
+     "duration": 10,
+     "file": "acc_off",
+     "checks": [],
+     "tx": []
+    },
+    {
+     "id": "3.1.3",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "action",
+     "title": "IGN ON, engine not started (start button + brake)",
+     "do": "Press start with brake: ignition on, engine not started",
+     "duration": 10,
+     "file": "ign_on_btn",
+     "checks": [],
+     "tx": []
+    },
+    {
+     "id": "3.1.4",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "action",
+     "title": "Engine start (crank + run)",
+     "do": "Brake pressed, press start button: crank until the engine catches, then let go (idle)",
+     "duration": 30,
+     "file": "nd_start",
+     "checks": [
+      "0x202"
+     ]
+    },
+    {
+     "id": "3.1.5",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "action",
+     "title": "Dry crank (no start)",
+     "do": "Crank 2-3 s and release; the engine must not start. Log the PCM request that came before/during the crank (immobilizer sync, start command).",
+     "duration": 15,
+     "file": "nd_crank_abort",
+     "checks": [
+      "0x202"
+     ],
+     "warn": "If the immobilizer is not synced yet, the crank will not fire — record the 'waiting' request."
+    },
+    {
+     "id": "3.1.6",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "state",
+     "title": "Immobilizer handshake (key on -> wait -> off)",
+     "do": "Ignition on, wait 5 s, then off. Capture the PCM <-> Start/Stop <-> cluster pair",
+     "duration": 30,
+     "file": "nd_immo",
+     "checks": []
+    },
+    {
+     "id": "3.1.7",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "state",
+     "title": "i-stop: activate (neutral, standing)",
+     "do": "Neutral, brake, let go when allowed — i-stop shuts the engine down. Log A/F: battery, PCM shutdown sequence, cluster message",
+     "duration": 60,
+     "file": "nd_istop_on",
+     "checks": []
+    },
+    {
+     "id": "3.1.8",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "action",
+     "title": "i-stop: return from shutdown",
+     "do": "From i-stop: brake press (or D + brake, per the car logic) — engine restarts. Log the start-from-i-stop sequence",
+     "duration": 30,
+     "file": "nd_istop_return",
+     "checks": [
+      "0x202"
+     ]
+    },
+    {
+     "id": "3.1.9",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "action",
+     "title": "i-stop: OFF button",
+     "do": "Press the i-stop disable button, confirm the state change on the cluster; back to ON after the record",
+     "duration": 10,
+     "file": "nd_istop_btn",
+     "checks": [],
+     "note": "MS: i-stop switch. HS: i-stop indicator + PCM status."
+    }
+   ]
+  },
+  {
+   "id": "4",
+   "title": "Engine: RPM and throttle (HS only)",
+   "warn": "Warm engine. Neutral, on stand or wheels off the ground. All actions smooth unless stated otherwise.",
+   "tests": [
+    {
+     "id": "4.1.1",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Smooth press 0->25%",
+     "do": "Smoothly bring the accelerator pedal up to 25%",
+     "duration": 10,
+     "file": "accel_25",
+     "checks": [
+      "0x202"
+     ]
+    },
+    {
+     "id": "4.1.2",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Hold 25%",
+     "do": "Hold 25%",
+     "duration": 5,
+     "file": "accel_hold25",
+     "checks": [
+      "0x202"
+     ]
+    },
+    {
+     "id": "4.1.3",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Smooth press 25->50%",
+     "do": "Smoothly bring it up to 50%",
+     "duration": 10,
+     "file": "accel_50",
+     "checks": [
+      "0x202"
+     ]
+    },
+    {
+     "id": "4.1.4",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Hold 50%",
+     "do": "Hold 50%",
+     "duration": 5,
+     "file": "accel_hold50",
+     "checks": [
+      "0x202"
+     ]
+    },
+    {
+     "id": "4.1.5",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Sharp press 0->100%",
+     "do": "Snap the pedal to the floor",
+     "duration": 5,
+     "file": "accel_wot",
+     "checks": [
+      "0x202"
+     ]
+    },
+    {
+     "id": "4.1.6",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Smooth release 100->0%",
+     "do": "Smoothly release the pedal",
+     "duration": 10,
+     "file": "accel_release",
+     "checks": [
+      "0x202"
+     ]
+    },
+    {
+     "id": "4.2.1",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "state",
+     "title": "Idle (warmed up)",
+     "do": "Record the average value",
+     "duration": 60,
+     "file": "rpm_idle",
+     "checks": [
+      "0x202"
+     ]
+    },
+    {
+     "id": "4.2.2",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Smooth ramp-up to 1500 rpm",
+     "do": "Smoothly raise to 1500 rpm and hold",
+     "duration": 10,
+     "file": "rpm_1500",
+     "checks": [
+      "0x202"
+     ]
+    },
+    {
+     "id": "4.2.3",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Smooth ramp-up to 2000 rpm",
+     "do": "Smoothly raise to 2000 rpm and hold",
+     "duration": 10,
+     "file": "rpm_2000",
+     "checks": [
+      "0x202"
+     ]
+    },
+    {
+     "id": "4.2.4",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Smooth ramp-up to 3000 rpm",
+     "do": "Smoothly raise to 3000 rpm and hold",
+     "duration": 10,
+     "file": "rpm_3000",
+     "checks": [
+      "0x202"
+     ]
+    },
+    {
+     "id": "4.2.5",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Smooth ramp-up to 5000 rpm",
+     "do": "Smoothly raise to 5000 rpm and hold",
+     "duration": 10,
+     "file": "rpm_5000",
+     "checks": [
+      "0x202"
+     ]
+    },
+    {
+     "id": "4.2.6",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Sharp drop to idle",
+     "do": "Release the pedal — drop back to idle",
+     "duration": 10,
+     "file": "rpm_drop",
+     "checks": [
+      "0x202"
+     ]
+    },
+    {
+     "id": "4.2.7",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Blip (if safe)",
+     "do": "Brief throttle blip, warmed-up engine only",
+     "duration": 5,
+     "file": "rpm_cut",
+     "checks": [
+      "0x202"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "5",
+   "title": "Transmission: gear position signals (HS only)",
+   "warn": "Gear position is published by the PCM on HS (0x165). Reverse lamp is BCM (MS) — see stage 11 for the reverse-light capture.",
+   "tests": [
+    {
+     "id": "5.1.1",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Neutral -> 1st gear",
+     "duration": 10,
+     "file": "gear_n1",
+     "checks": [
+      "0x165"
+     ]
+    },
+    {
+     "id": "5.1.2",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "1st -> 2nd gear",
+     "duration": 10,
+     "file": "gear_12",
+     "checks": [
+      "0x165"
+     ]
+    },
+    {
+     "id": "5.1.3",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "2nd -> 3rd gear",
+     "duration": 10,
+     "file": "gear_23",
+     "checks": [
+      "0x165"
+     ]
+    },
+    {
+     "id": "5.1.4",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "3rd -> neutral",
+     "duration": 10,
+     "file": "gear_3n",
+     "checks": [
+      "0x165"
+     ]
+    },
+    {
+     "id": "5.1.5",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Reverse: short back + return to N",
+     "do": "Short R for a few meters, then N; confirm PCM-visible R state",
+     "duration": 30,
+     "file": "gear_R",
+     "checks": [
+      "0x165"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "6",
+   "title": "Braking, handbrake and DSC/TCS button (static)",
+   "warn": "Brake pedal is HS (0x78). Handbrake lever switch is BCM-side (MS) and mirrored to DSC/cluster on HS. DSC OFF button is BCM-side (MS) and mirrored to the cluster on HS.",
+   "tests": [
+    {
+     "id": "6.1.1",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Brake pedal press (light)",
+     "duration": 10,
+     "file": "brake_light",
+     "checks": [
+      "0x78"
+     ]
+    },
+    {
+     "id": "6.1.2",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Brake pedal press (heavy)",
+     "duration": 10,
+     "file": "brake_hard",
+     "checks": [
+      "0x78"
+     ]
+    },
+    {
+     "id": "6.1.3",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Brake hold",
+     "duration": 5,
+     "file": "brake_hold",
+     "checks": [
+      "0x78"
+     ]
+    },
+    {
+     "id": "6.1.4",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Brake pedal to the floor (stand)",
+     "do": "Press the pedal fully from idle; log the ABS/DSC ECU reactions",
+     "duration": 10,
+     "file": "abs_event",
+     "checks": [
+      "0x78"
+     ],
+     "note": "Real ABS pulsing is captured from speed in 7.1.3."
+    },
+    {
+     "id": "6.1.5",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "action",
+     "title": "Handbrake up",
+     "duration": 10,
+     "file": "handbrake_up",
+     "checks": [],
+     "note": "MS: lever switch. HS: cluster brake lamp + DSC state. ND handbrake signal bit: to be confirmed."
+    },
+    {
+     "id": "6.1.6",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "action",
+     "title": "Handbrake down",
+     "duration": 10,
+     "file": "handbrake_down",
+     "checks": [],
+     "note": "Pair with 6.1.5."
+    },
+    {
+     "id": "6.1.7",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "action",
+     "title": "DSC/TCS OFF (short press)",
+     "do": "Short press on the DSC OFF button: DSC indicator 'OFF' should light",
+     "duration": 10,
+     "file": "dsc_off",
+     "checks": [],
+     "note": "MS: DSC switch. HS: cluster 'OFF' indicator + DSC ECU status bit."
+    },
+    {
+     "id": "6.1.8",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "action",
+     "title": "DSC/TCS ON (short press, back to default)",
+     "do": "Short press again: DSC indicator 'OFF' should go out",
+     "duration": 10,
+     "file": "dsc_on",
+     "checks": [],
+     "note": "Pair with 6.1.7: record the on/off state-change delta."
+    },
+    {
+     "id": "6.1.9",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "action",
+     "title": "DSC OFF button — long press (~10 s)",
+     "do": "Hold DSC OFF for ~10 s. Per the owner's manual this may activate the switch-fault detection and the DSC returns to ON automatically",
+     "duration": 15,
+     "file": "dsc_long_press",
+     "checks": [],
+     "note": "Capture the long-press behaviour vs. 6.1.7 short press."
+    }
+   ]
+  },
+  {
+   "id": "7",
+   "title": "Driving (closed lot): motion, ABS/DSC, BA, wheel spin (HS only)",
+   "warn": "Closed lot only. Two people: driver + spotter. Speed limit 50 km/h. Do not continue on public roads!",
+   "tests": [
+    {
+     "id": "7.1.1",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "0 -> 30 km/h (1st -> 2nd, smooth)",
+     "do": "Smooth launch, upshift, decelerate back to 0",
+     "duration": 60,
+     "file": "drive_30",
+     "checks": [
+      "0x202"
+     ],
+     "note": "First capture of the vehicle-speed field (0x202 bytes 2-3) in motion."
+    },
+    {
+     "id": "7.1.2",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "state",
+     "title": "Steady cruise 30-50 km/h (no cruise control)",
+     "do": "Constant speed, gentle corrections; record the long-duration traffic",
+     "duration": 120,
+     "file": "drive_cruise",
+     "checks": [
+      "0x202"
+     ],
+     "note": "Same speed will be repeated in 8.1.1 with cruise ON — the diff is the cruise bits."
+    },
+    {
+     "id": "7.1.3",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "ABS/DSC engagement from speed (30 -> stop, firm pressure)",
+     "do": "From ~30 km/h: firm, constant brake pressure until ABS pulses",
+     "duration": 30,
+     "file": "drive_abs",
+     "checks": [
+      "0x78"
+     ],
+     "warn": "Closed lot only",
+     "note": "DSC ECU ID: to be confirmed."
+    },
+    {
+     "id": "7.1.4",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "BA / hill-start assist",
+     "do": "On a 5-10 degree slope: stop, N -> D, release the brake — BA holds the car for a couple of seconds",
+     "duration": 30,
+     "file": "drive_ba",
+     "checks": [],
+     "note": "BA state visible to the PCM? To be confirmed (DSC message)."
+    },
+    {
+     "id": "7.1.5",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Wheel spin / DSC traction (1st gear, sharp throttle)",
+     "do": "1st gear, sharp throttle: wheels spin, DSC cuts in",
+     "duration": 30,
+     "file": "drive_spin",
+     "checks": [
+      "0x202"
+     ],
+     "note": "Wheel speeds must be mapped before the DSC is disabled."
+    },
+    {
+     "id": "7.1.6",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Reverse: short drive 5-10 km/h, stop",
+     "do": "Slow reverse, then stop with brake",
+     "duration": 30,
+     "file": "drive_reverse",
+     "checks": [
+      "0x202"
+     ],
+     "note": "Reverse lamp actuation is MS-side — see stage 11 (11.1.19 reverse lamp test)."
+    }
+   ]
+  },
+  {
+   "id": "8",
+   "title": "Cruise control (driving, closed lot) — both buses",
+   "warn": "The wheel switches are MS-side (BCM). The cruise status and set-speed are HS-side inside 0x165. Capture both and correlate. Confirm the bit layout by diff against 7.1.2 (same speed without cruise).",
+   "tests": [
+    {
+     "id": "8.1.1",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "action",
+     "title": "MODE: cruise ON (standby)",
+     "do": "Steady ~60 km/h, press MODE. Cruise indicator should light (standby state)",
+     "duration": 15,
+     "file": "cc_on",
+     "checks": [
+      "0x165"
+     ],
+     "note": "Expected 0x165 status: 0 = off, 3 = on (standby), 5 = active — to be confirmed."
+    },
+    {
+     "id": "8.1.2",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "action",
+     "title": "SET+ : fix speed",
+     "do": "Short press SET+ to lock the current speed",
+     "duration": 15,
+     "file": "cc_set",
+     "checks": [
+      "0x165"
+     ],
+     "note": "Status should switch 3 -> 5."
+    },
+    {
+     "id": "8.1.3",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "action",
+     "title": "SET+ tap (+1 km/h)",
+     "do": "Short tap SET+, wait for the change to settle",
+     "duration": 15,
+     "file": "cc_plus1",
+     "checks": [
+      "0x165"
+     ]
+    },
+    {
+     "id": "8.1.4",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "action",
+     "title": "SET+ long hold (+10 km/h)",
+     "do": "Hold SET+ ~1 s, release",
+     "duration": 20,
+     "file": "cc_plus10",
+     "checks": [
+      "0x165"
+     ]
+    },
+    {
+     "id": "8.1.5",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "action",
+     "title": "SET- tap (-1 km/h)",
+     "do": "Short tap SET-",
+     "duration": 15,
+     "file": "cc_minus1",
+     "checks": [
+      "0x165"
+     ]
+    },
+    {
+     "id": "8.1.6",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "action",
+     "title": "CANCEL: cruise suspended",
+     "do": "Press CANCEL/OFF-CAN. Set speed must remain in memory",
+     "duration": 15,
+     "file": "cc_cancel",
+     "checks": [
+      "0x165"
+     ],
+     "note": "Status should drop 5 -> 3 (standby) — to be confirmed."
+    },
+    {
+     "id": "8.1.7",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "action",
+     "title": "RES: resume",
+     "do": "Press RES. Car should return to the previously set speed",
+     "duration": 20,
+     "file": "cc_resume",
+     "checks": [
+      "0x165"
+     ]
+    },
+    {
+     "id": "8.1.8",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "action",
+     "title": "OFF/CAN: cruise fully off",
+     "do": "Press OFF/CAN (or hold MODE) — cruise off, memory cleared",
+     "duration": 15,
+     "file": "cc_off",
+     "checks": [
+      "0x165"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "9",
+   "title": "Speed limiter / ASL (driving, closed lot) — both buses",
+   "warn": "ASL is entered by pressing MODE while cruise is already on (see owner's manual). The mode-change frame is MS-side button press + HS-side status in 0x165. Confirm with diff against stages 7.1.2 and 8.",
+   "tests": [
+    {
+     "id": "9.1.1",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "action",
+     "title": "MODE: cruise -> ASL (limiter)",
+     "do": "Steady ~50 km/h with cruise on; press MODE to switch to ASL",
+     "duration": 15,
+     "file": "asl_on",
+     "checks": [
+      "0x165"
+     ],
+     "note": "Capture the mode-change frame (cruise->ASL)."
+    },
+    {
+     "id": "9.1.2",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "action",
+     "title": "Set limit (e.g. 60 km/h) via SET+/SET-",
+     "do": "Set ASL limit to 60 km/h using the steering-wheel buttons",
+     "duration": 15,
+     "file": "asl_set",
+     "checks": [
+      "0x165"
+     ]
+    },
+    {
+     "id": "9.1.3",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "action",
+     "title": "Accelerate up to the limit",
+     "do": "Smoothly accelerate to the set limit; hold just below it",
+     "duration": 20,
+     "file": "asl_reach",
+     "checks": [
+      "0x202",
+      "0x165"
+     ]
+    },
+    {
+     "id": "9.1.4",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "action",
+     "title": "Kick-down attempt to exceed the limit",
+     "do": "Press the accelerator fully (kick-down): record whether the ND allows a brief over-speed or holds the limit",
+     "duration": 15,
+     "file": "asl_kickdown",
+     "checks": [
+      "0x202",
+      "0x165"
+     ],
+     "note": "Behaviour varies by model year — capture whatever happens."
+    },
+    {
+     "id": "9.1.5",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "action",
+     "title": "SET- to lower the limit",
+     "do": "Lower the set limit with SET-",
+     "duration": 15,
+     "file": "asl_lower",
+     "checks": [
+      "0x165"
+     ]
+    },
+    {
+     "id": "9.1.6",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "action",
+     "title": "OFF/CAN: disable ASL",
+     "do": "Press OFF/CAN (or MODE) to exit ASL",
+     "duration": 15,
+     "file": "asl_off",
+     "checks": [
+      "0x165"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "10",
+   "title": "Steering and EPS",
+   "warn": "",
+   "tests": [
+    {
+     "id": "10.1.1",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Steer 45 degrees to the left",
+     "duration": 10,
+     "file": "steer_left45",
+     "checks": [
+      "0x86"
+     ]
+    },
+    {
+     "id": "10.1.2",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Steer 45 degrees to the right",
+     "duration": 10,
+     "file": "steer_right45",
+     "checks": [
+      "0x86"
+     ]
+    },
+    {
+     "id": "10.1.3",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Full lock to the left",
+     "duration": 10,
+     "file": "steer_left_full",
+     "checks": [
+      "0x86"
+     ]
+    },
+    {
+     "id": "10.1.4",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Full lock to the right",
+     "duration": 10,
+     "file": "steer_right_full",
+     "checks": [
+      "0x86"
+     ]
+    },
+    {
+     "id": "10.1.5",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Fast steering input",
+     "duration": 10,
+     "file": "steer_fast",
+     "checks": [
+      "0x86"
+     ]
+    },
+    {
+     "id": "10.1.6",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Straight-line driving",
+     "duration": 30,
+     "file": "steer_straight",
+     "checks": [
+      "0x86"
+     ]
+    },
+    {
+     "id": "10.1.7",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "action",
+     "title": "EPS state change (button, wheel centered)",
+     "do": "With the wheel centered, press the DSC/EPS-related button: EPS off/on transitions; return the wheel and restore EPS",
+     "duration": 15,
+     "file": "eps_off",
+     "checks": [
+      "0x86"
+     ],
+     "warn": "ND-specific: in the swap RE, EPS did not work without the PCM signal — capture the EPS state flag and which ECU owns it.",
+     "note": "MS: button press. HS: EPS state + steering-angle freeze behaviour."
+    }
+   ]
+  },
+  {
+   "id": "11",
+   "title": "Body electronics and comfort",
+   "warn": "Lighting (11.1.1–11.1.8) is both: switch on MS, lamp state on HS (0x09A). All other body functions (wipers, washer, windows, mirrors, audio, horn, reverse lamp) are MS-only.",
+   "tests": [
+    {
+     "id": "11.1.1",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "action",
+     "title": "Turn signals (left): on/off",
+     "duration": 10,
+     "file": "turn_left",
+     "checks": [
+      "0x09A"
+     ],
+     "note": "MS: lever input. HS: turn-lamp state in 0x09A."
+    },
+    {
+     "id": "11.1.2",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "action",
+     "title": "Turn signals (right): on/off",
+     "duration": 10,
+     "file": "turn_right",
+     "checks": [
+      "0x09A"
+     ],
+     "note": "As 11.1.1, right side."
+    },
+    {
+     "id": "11.1.3",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "action",
+     "title": "Hazard lights: on",
+     "duration": 10,
+     "file": "hazard",
+     "checks": [
+      "0x09A"
+     ]
+    },
+    {
+     "id": "11.1.4",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "action",
+     "title": "Position lights: on/off",
+     "duration": 10,
+     "file": "parking_lights",
+     "checks": [
+      "0x09A"
+     ]
+    },
+    {
+     "id": "11.1.5",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "action",
+     "title": "Low beam: on/off",
+     "duration": 10,
+     "file": "low_beam",
+     "checks": [
+      "0x09A"
+     ]
+    },
+    {
+     "id": "11.1.6",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "action",
+     "title": "High beam: on/off",
+     "duration": 10,
+     "file": "high_beam",
+     "checks": [
+      "0x09A"
+     ]
+    },
+    {
+     "id": "11.1.7",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "action",
+     "title": "High-beam flash",
+     "duration": 10,
+     "file": "flash",
+     "checks": [
+      "0x09A"
+     ]
+    },
+    {
+     "id": "11.1.8",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "action",
+     "title": "Fog lights (if fitted)",
+     "duration": 10,
+     "file": "fog",
+     "checks": [
+      "0x09A"
+     ]
+    },
+    {
+     "id": "11.1.9",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "ms"
+     ],
+     "kind": "action",
+     "title": "Windshield wipers (intermittent)",
+     "duration": 10,
+     "file": "wiper_int",
+     "checks": [],
+     "note": "MS-only. Any HS-visible change (cluster status) is a mirror."
+    },
+    {
+     "id": "11.1.10",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "ms"
+     ],
+     "kind": "action",
+     "title": "Windshield wipers (continuous)",
+     "duration": 10,
+     "file": "wiper_cont",
+     "checks": []
+    },
+    {
+     "id": "11.1.11",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "ms"
+     ],
+     "kind": "action",
+     "title": "Windshield washer",
+     "duration": 10,
+     "file": "washer",
+     "checks": []
+    },
+    {
+     "id": "11.1.12",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "ms"
+     ],
+     "kind": "action",
+     "title": "Driver power window: open/close",
+     "duration": 10,
+     "file": "window_driver",
+     "checks": []
+    },
+    {
+     "id": "11.1.13",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "ms"
+     ],
+     "kind": "action",
+     "title": "Passenger power window: open/close",
+     "duration": 10,
+     "file": "window_passenger",
+     "checks": []
+    },
+    {
+     "id": "11.1.14",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "ms"
+     ],
+     "kind": "action",
+     "title": "Mirror adjust (left/right/up/down)",
+     "duration": 10,
+     "file": "mirror_adjust",
+     "checks": []
+    },
+    {
+     "id": "11.1.15",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "ms"
+     ],
+     "kind": "action",
+     "title": "Mirror fold (if fitted)",
+     "duration": 10,
+     "file": "mirror_fold",
+     "checks": []
+    },
+    {
+     "id": "11.1.16",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "ms"
+     ],
+     "kind": "action",
+     "title": "Audio: head-unit ON/OFF",
+     "duration": 10,
+     "file": "audio_onoff",
+     "checks": [],
+     "note": "Infotainment audio is mostly AAS/MS; watch for cluster mirroring on HS."
+    },
+    {
+     "id": "11.1.17",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "ms"
+     ],
+     "kind": "action",
+     "title": "Steering-wheel audio buttons",
+     "do": "Volume +/-, track up/down, source, phone",
+     "duration": 15,
+     "file": "audio_buttons",
+     "checks": [],
+     "note": "MS-side via BCM; cruise/ASL wheel buttons are covered in stages 8 and 9 (both buses)."
+    },
+    {
+     "id": "11.1.18",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "ms"
+     ],
+     "kind": "action",
+     "title": "Horn",
+     "duration": 5,
+     "file": "horn",
+     "checks": []
+    },
+    {
+     "id": "11.1.19",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "ms"
+     ],
+     "kind": "action",
+     "title": "Reverse lamp (with ignition on, engine off, gear in R)",
+     "duration": 10,
+     "file": "reverse_lamp",
+     "checks": [],
+     "note": "MS: reverse-lamp actuation by BCM. HS: gear-R state is covered in 5.1.5."
+    }
+   ]
+  },
+  {
+   "id": "12",
+   "title": "HVAC",
+   "warn": "HVAC controls are MS-side. The HS-side consequence is engine load (A/F, RPM compensation on 0x202) and charging/battery draw (rear-defrost, seat heater). Capture both buses and correlate.",
+   "tests": [
+    {
+     "id": "12.1.1",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "action",
+     "title": "A/C on/off (watch engine compensation)",
+     "duration": 30,
+     "file": "ms_ac",
+     "checks": [
+      "0x202"
+     ],
+     "note": "MS: A/C request + clutch. HS: idle-up/A-F compensation on 0x202."
+    },
+    {
+     "id": "12.1.2",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "ms"
+     ],
+     "kind": "action",
+     "title": "Temperature change (max -> min)",
+     "duration": 30,
+     "file": "ms_temp",
+     "checks": []
+    },
+    {
+     "id": "12.1.3",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "ms"
+     ],
+     "kind": "action",
+     "title": "Fan speed change (1 -> max)",
+     "duration": 30,
+     "file": "ms_fan",
+     "checks": []
+    },
+    {
+     "id": "12.1.4",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "ms"
+     ],
+     "kind": "action",
+     "title": "Airflow mode change (windshield -> feet)",
+     "duration": 30,
+     "file": "ms_mode",
+     "checks": []
+    },
+    {
+     "id": "12.1.5",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "action",
+     "title": "Rear-window defrost on/off",
+     "duration": 10,
+     "file": "ms_rear_defrost",
+     "checks": [],
+     "note": "MS: defrost request. HS: charging/battery draw (ID to be confirmed)."
+    },
+    {
+     "id": "12.1.6",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "action",
+     "title": "Seat heater on/off",
+     "duration": 10,
+     "file": "ms_seat_heat",
+     "checks": [],
+     "note": "MS: heater request. HS: battery/charging response — to be confirmed."
+    },
+    {
+     "id": "12.1.7",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "ms"
+     ],
+     "kind": "action",
+     "title": "Air recirculation (on/off)",
+     "duration": 10,
+     "file": "ms_recirc",
+     "checks": []
+    }
+   ]
+  },
+  {
+   "id": "13",
+   "title": "Instrument panel and indicators (HS only)",
+   "warn": "Cluster is on HS. Indicator lamp IDs to be confirmed (likely inside 0x720 diagnostics). Establish each lamp by diff against stage 1.",
+   "tests": [
+    {
+     "id": "13.1.1",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "state",
+     "title": "Check Engine indicator",
+     "duration": 60,
+     "file": "ind_cel",
+     "checks": []
+    },
+    {
+     "id": "13.1.2",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "state",
+     "title": "ABS indicator",
+     "duration": 60,
+     "file": "ind_abs",
+     "checks": []
+    },
+    {
+     "id": "13.1.3",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "state",
+     "title": "DSC/TCS indicator",
+     "duration": 60,
+     "file": "ind_dsc",
+     "checks": [],
+     "note": "Pair with 6.1.7 / 6.1.8 / 6.1.9."
+    },
+    {
+     "id": "13.1.4",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "state",
+     "title": "Brake system indicator",
+     "duration": 60,
+     "file": "ind_brake",
+     "checks": []
+    },
+    {
+     "id": "13.1.5",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "state",
+     "title": "Seatbelt indicator",
+     "duration": 60,
+     "file": "ind_seatbelt",
+     "checks": []
+    },
+    {
+     "id": "13.1.6",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "state",
+     "title": "Airbag indicator",
+     "duration": 60,
+     "file": "ind_airbag",
+     "checks": []
+    },
+    {
+     "id": "13.1.7",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "state",
+     "title": "Fuel level at several levels",
+     "do": "Log the gauge response at several fuel levels",
+     "duration": 120,
+     "file": "ind_fuel",
+     "checks": []
+    },
+    {
+     "id": "13.1.8",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "state",
+     "title": "Engine temperature needle (during warm-up)",
+     "duration": 300,
+     "file": "ind_temp",
+     "checks": [],
+     "note": "ND coolant-temp ID: to be confirmed."
+    },
+    {
+     "id": "13.1.9",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "state",
+     "title": "Oil pressure lamp (ignition on/off)",
+     "duration": 120,
+     "file": "ind_oil",
+     "checks": []
+    },
+    {
+     "id": "13.1.10",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "state",
+     "title": "Cruise control indicator (with stage 8)",
+     "duration": 30,
+     "file": "ind_cruise",
+     "checks": [
+      "0x165"
+     ],
+     "note": "White/standby vs green/active — confirm the two states."
+    },
+    {
+     "id": "13.1.11",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "state",
+     "title": "ASL indicator (with stage 9)",
+     "duration": 30,
+     "file": "ind_asl",
+     "checks": [
+      "0x165"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "14",
+   "title": "Diagnostics: OBD / UOID (HS only)",
+   "warn": "UOID traffic goes through the HS gateway; the ND gateway request/response IDs are to be confirmed.",
+   "checklist": [
+    "1) Even a wrong request is useful: the gateway answer (or silence) marks the diagnostic path.",
+    "2) Classic Mazda UOID (11-bit): request 0x7DF/0x701 channel, answer on 0x7E8/0x7EC — confirm for ND.",
+    "3) Keep a DTC snapshot (14.1.2) BEFORE the clear (14.1.4).",
+    "4) Reset/clear DTCs only at the very end of the whole campaign."
+   ],
+   "tests": [
+    {
+     "id": "14.1.1",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "UOID Mode 01 41/42: ECU status",
+     "do": "Send the ECU-status request after ignition on (PCM present, engine off); log the gateway response",
+     "duration": 60,
+     "file": "obd_state",
+     "checks": [],
+     "tx": [
+      "0x7DF"
+     ]
+    },
+    {
+     "id": "14.1.2",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "UOID Mode 03: read DTC",
+     "do": "Read the stored DTCs (all modules the gateway forwards); this is the reference DTC snapshot",
+     "duration": 60,
+     "file": "obd_dtc",
+     "checks": [],
+     "tx": [
+      "0x7DF"
+     ]
+    },
+    {
+     "id": "14.1.3",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "UOID Mode 01: read-only PIDs (fuel trim etc.)",
+     "do": "Read-only PIDs at idle: verifies the gateway read path used by RaceChrono-like tools",
+     "duration": 60,
+     "file": "obd_trim",
+     "checks": [],
+     "tx": [
+      "0x7DF"
+     ]
+    },
+    {
+     "id": "14.1.4",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "UOID Mode 04: clear DTC (end of campaign only)",
+     "do": "After the 14.1.2 snapshot is saved: clear DTCs and re-read to verify the clear",
+     "duration": 60,
+     "file": "obd_clear",
+     "checks": [],
+     "tx": [
+      "0x7DF"
+     ],
+     "warn": "Only after all other tests are done — DTCs are also evidence of swap anomalies."
+    }
+   ]
+  },
+  {
+   "id": "15",
+   "title": "PCM-off method (HS diff vs. baseline)",
+   "warn": "Disconnecting the stock PCM of the MX-5 ND — only with the ignition off and the battery terminal unclamped. After the test — restore the connection.",
+   "checklist": [
+    "Goal: determine which HS-CAN IDs the stock PCM of the MX-5 ND generates.",
+    "1) Physically disconnect the stock PCM (unplug its connector).",
+    "2) Turn the ignition on (the engine will not start).",
+    "3) Record the HS-CAN traffic (test 15.1.1).",
+    "4) Compare with 1.1.2 (ign_on) and 1.1.3 (idle). The IDs absent with the PCM disconnected are the PCM messages — the gateway must emulate them.",
+    "Critical for emulation: 0x202, 0x78, EPS (critical), immobilizer (critical), 0x165 (gear + cruise/ASL).",
+    "Optional companion test: with the same PCM-off state, also record MS-CAN to confirm BCM/HVAC still run — mark this as 15.1.2."
+   ],
+   "tests": [
+    {
+     "id": "15.1.1",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "state",
+     "title": "Recording: PCM off, ignition on",
+     "do": "PCM unplugged, ignition on, engine not started",
+     "duration": 60,
+     "file": "nd_pcm_off",
+     "checks": [
+      "0x202",
+      "0x78",
+      "0x09A",
+      "0x165",
+      "0x86"
+     ]
+    },
+    {
+     "id": "15.1.2",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "ms"
+     ],
+     "kind": "state",
+     "title": "Recording: PCM off, MS side still alive",
+     "do": "PCM unplugged, ignition on — MS-CAN continues to show BCM/HVAC traffic",
+     "duration": 60,
+     "file": "nd_pcm_off_ms",
+     "checks": []
+    }
+   ]
+  },
+  {
+   "id": "16",
+   "title": "Stress-test method (module disconnects)",
+   "warn": "Only on stand; battery disconnected while a module is pulled.",
+   "checklist": [
+    "Goal: find the PCM's 'service' messages that change when errors occur.",
+    "1) Connect to both buses and start recording.",
+    "2) Temporarily disconnect one module (DSC, ABS sensor, cruise switch cluster).",
+    "3) Record the traffic.",
+    "4) Compare with the reference (stage 1): messages that appear/change on disconnection are diagnostic or service messages."
+   ],
+   "tests": [
+    {
+     "id": "16.1.1",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "state",
+     "title": "Stress: DSC module disconnected, HS traffic",
+     "duration": 60,
+     "file": "nd_stress_dsc",
+     "checks": []
+    },
+    {
+     "id": "16.1.2",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "state",
+     "title": "Stress: ABS wheel sensor disconnected, HS traffic",
+     "duration": 60,
+     "file": "nd_stress_abs",
+     "checks": []
+    },
+    {
+     "id": "16.1.3",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs",
+      "ms"
+     ],
+     "kind": "state",
+     "title": "Stress: cruise/ASL switch cluster disconnected, both buses",
+     "duration": 60,
+     "file": "nd_stress_cc",
+     "checks": [
+      "0x165"
+     ],
+     "note": "MS loses the button frames; HS loses 0x165 cruise/ASL bits — confirm both sides.",
+     "tx": []
+    }
+   ]
+  },
+  {
+   "id": "17",
+   "title": "Verification and documentation",
+   "warn": "",
+   "checklist": [
+    "Repeat all tests 3 times (reproducibility).",
+    "Compare with the existing DBCs: RaceChrono MX-5 ND DBC and the ND swap project data.",
+    "Document anomalies: messages that appear irregularly and do not correlate with the actions.",
+    "Create the final ND DBC: 'CAN ID -> bus -> byte -> bit -> physical quantity -> formula', stating the state in which each signal is active.",
+    "Close the open list: (a) handbrake/DSC/EPS state IDs, (b) cruise/ASL bits inside 0x165, (c) immobilizer handshake frames, (d) PCM message set (stage 15 diff), (e) UOID gateway paths (stage 14), (f) exact bus split for each lamp (0x09A vs. BCM messages), (g) which HVAC signals are MS-only vs. mirrored to HS."
+   ],
+   "tests": []
+  }
+ ]
+}

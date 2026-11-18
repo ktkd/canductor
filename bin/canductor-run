@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# canductor-run — interactive scenario run (worker).
+# Default: full scenario (mazda_swap), both adapters, --out logs.
+# Usage:   ./canductor-run                     # mazda_swap (interactive)
+#          ./canductor-run --scenario bench_quick --auto --repeats 1
+#          ./canductor-run --only 2 --cars rx8 --buses hs
+# Env vars: SCENARIO, DEV_HS, DEV_MS, OUT
+set -euo pipefail
+SCENARIO="${SCENARIO:-mazda_swap}"
+DEV_HS="${DEV_HS:-/dev/ttyUSB0}"
+DEV_MS="${DEV_MS:-/dev/ttyUSB1}"
+OUT="${OUT:-./logs}"
+
+# If the user provides no arguments — a full interactive run.
+if [[ $# -eq 0 ]]; then
+  exec python3 -m canductor run \
+       -s "$SCENARIO" \
+       --dev "hs=${DEV_HS}" --dev "ms=${DEV_MS}" \
+       -o "$OUT"
+fi
+exec python3 -m canductor run -s "$SCENARIO" --dev "hs=${DEV_HS}" --dev "ms=${DEV_MS}" -o "$OUT" "$@"

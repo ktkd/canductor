@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# canductor — thin wrapper over the CLI console-script (`python3 -m canductor`).
+# All commands: devices | core | link | run | probe
+exec python3 -m canductor "$@"

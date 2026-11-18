@@ -1,0 +1,942 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CANDuctor — CAN data collection</title>
+<style>
+:root {
+  --bg: #ffffff;
+  --fg: #1a1a1a;
+  --primary: #0d47a1;
+  --border: #ddd;
+  --zebra: #f5f7fa;
+  --hover: #e3f2fd;
+  --highlight: #fff3e0;
+  --good: #2e7d32;   --good-bg: #c8e6c9;
+  --warn: #ef6c00;   --warn-bg: #ffe0b2;
+  --bad:  #c62828;   --bad-bg:  #ffcdd2;
+  --yellow: #f57f17; --yellow-bg: #fff9c4;
+  --muted: #666;
+  --code-bg: #f5f7fa;
+  --mono: Consolas, 'DejaVu Sans Mono', monospace;
+}
+* { box-sizing: border-box; }
+html { height: 100%; }
+body {
+  font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  font-size: 11px; color: var(--fg); background: var(--bg);
+  margin: 0; padding: 12px 16px; line-height: 1.4; min-height: 100%;
+}
+/* slim scrollbars everywhere (WebKit + FF) */
+* { scrollbar-width: thin; scrollbar-color: #cfd8dc transparent; }
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: #cfd8dc; border-radius: 4px; }
+*::-webkit-scrollbar-thumb:hover { background: #90a4ae; }
+h1 { font-size: 20px; margin: 0; color: var(--primary); font-weight: 600; }
+h2 { font-size: 15px; margin: 0 0 8px; color: var(--primary); font-weight: 600;
+     border-bottom: 2px solid var(--primary); padding-bottom: 4px; }
+h3 { font-size: 13px; margin: 16px 0 6px; color: #333; }
+a { color: var(--primary); }
+table { width: 100%; border-collapse: collapse; margin: 0; background: #fff; font-size: 10.5px; }
+th {
+  background: var(--primary); color: #fff; padding: 5px 8px; text-align: left;
+  font-weight: 600; border: 1px solid var(--primary); font-size: 10px;
+}
+td { padding: 4px 8px; border: 1px solid var(--border); vertical-align: top; }
+tr:nth-child(even) td { background: var(--zebra); }
+tbody tr:hover td { background: var(--hover); }
+code {
+  background: var(--code-bg); padding: 1px 5px; border-radius: 3px;
+  font-family: var(--mono); color: var(--primary); font-size: 9.5px;
+}
+pre {
+  background: var(--code-bg); padding: 12px; border-radius: 4px; overflow: auto;
+  border-left: 4px solid var(--primary); margin: 0;
+  font-family: var(--mono); font-size: 10px; white-space: pre-wrap; word-break: break-all; color: var(--fg);
+}
+.mono { font-family: var(--mono); }
+.small { font-size: 10px; }
+.muted { color: var(--muted); }
+.bad { color: var(--bad); font-weight: 600; }
+.good { color: var(--good); font-weight: 600; }
+.warning { background: var(--warn-bg); border-left: 4px solid var(--warn); padding: 9px 12px; margin: 8px 0; border-radius: 0 4px 4px 0; }
+.critical { background: var(--bad-bg); border-left: 4px solid var(--bad); padding: 9px 12px; margin: 8px 0; border-radius: 0 4px 4px 0; }
+.success { background: var(--good-bg); border-left: 4px solid var(--good); padding: 9px 12px; margin: 8px 0; border-radius: 0 4px 4px 0; }
+.info { background: var(--hover); border-left: 4px solid var(--primary); padding: 9px 12px; margin: 8px 0; border-radius: 0 4px 4px 0; }
+.badge {
+  display: inline-block; padding: 2px 6px; border-radius: 3px; font-size: 9.5px;
+  font-weight: 600; margin-right: 4px; background: var(--zebra); color: #333; border: 1px solid var(--border);
+}
+.badge-hs { background: var(--primary); color: #fff; border-color: var(--primary); }
+.badge-ms { background: var(--yellow-bg); color: var(--yellow); border-color: var(--yellow); }
+.badge-critical { background: var(--bad-bg); color: var(--bad); border-color: var(--bad); }
+.badge-verify { background: var(--good-bg); color: var(--good); border-color: var(--good); }
+
+#topbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 10px; }
+#topline { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: auto; }
+.st-badge {
+  display: inline-block; padding: 3px 10px; border-radius: 11px; font-size: 9.5px;
+  font-weight: 600; border: 1px solid var(--border); background: var(--zebra); color: var(--muted);
+}
+.st-run { background: var(--warn-bg); color: var(--warn); border-color: var(--warn); }
+.st-rec { background: var(--good-bg); color: var(--good); border-color: var(--good); animation: pulse 1.2s infinite; }
+.st-paused { background: var(--yellow-bg); color: var(--yellow); border-color: var(--yellow); }
+.st-done { background: var(--good-bg); color: var(--good); border-color: var(--good); }
+.st-error { background: var(--bad-bg); color: var(--bad); border-color: var(--bad); }
+@keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.45; } 100% { opacity: 1; } }
+.chip {
+  display: inline-flex; align-items: center; gap: 7px; background: #fff;
+  border: 1px solid var(--border); border-radius: 4px; padding: 3px 8px; font-size: 9.5px;
+}
+.chip-state { color: var(--muted); }
+.chip-state.ok { color: var(--good); font-weight: 600; }
+.chip-state.err { color: var(--bad); font-weight: 600; }
+/* app layout: steps + work fill the browser window */
+#main {
+  display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 12px;
+  height: calc(100vh - 62px); min-height: 480px;
+}
+.panel { background: #fff; border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; margin: 0; }
+#steps { overflow-y: auto; min-height: 0; }
+.step {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 6px; padding: 5px 7px; margin: 2px 0;
+  border: 1px solid transparent; border-left: 3px solid var(--border); border-radius: 3px; font-size: 10.5px;
+}
+.step:hover { background: var(--hover); }
+.step-cur { border-left-color: var(--primary); background: var(--highlight); }
+.step-done { opacity: 0.6; }
+.step-skip { opacity: 0.45; }
+.step-id { font-family: var(--mono); color: var(--primary); font-weight: 700; font-size: 10px; min-width: 42px; }
+.step-title { flex: 0 0 100%; margin-top: 3px; overflow-wrap: anywhere; }
+.step-meta { flex: 1 1 auto; min-width: 0; display: inline; font-size: 9.5px; color: var(--muted); white-space: normal; }
+.step-mark { width: 13px; text-align: center; font-weight: 700; }
+.step-done .step-mark { color: var(--good); }
+.step-skip .step-mark { color: var(--muted); }
+.step-cur .step-mark { color: var(--primary); }
+.card-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 6px; }
+.card-head h2 { margin: 0; border: none; padding: 0; font-size: 14px; flex: 1; }
+.card-do { margin: 7px 0; }
+.kv { margin: 5px 0; font-size: 10.5px; }
+.kv b { color: var(--primary); font-weight: 600; }
+.field { display: flex; flex-direction: column; gap: 3px; margin: 8px 0; min-width: 118px; font-size: 10.5px; }
+.field label { font-size: 9.5px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
+input, select, textarea {
+  background: #fff; color: var(--fg); border: 1px solid var(--border);
+  border-radius: 4px; padding: 5px 8px; font-family: inherit; font-size: 10.5px;
+}
+input:focus, select:focus, textarea:focus { outline: none; border-color: var(--primary); background: var(--hover); }
+textarea { resize: vertical; min-height: 48px; }
+.form-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+.btn {
+  display: inline-block; background: #fff; color: var(--fg); border: 1px solid var(--border);
+  border-radius: 4px; padding: 5px 12px; font-size: 10.5px; cursor: pointer; font-family: inherit; font-weight: 600;
+}
+.btn:hover:not(:disabled) { border-color: var(--primary); color: var(--primary); background: var(--hover); }
+.btn:disabled { opacity: 0.45; cursor: default; }
+.btn-go { background: var(--primary); border-color: var(--primary); color: #fff; }
+.btn-go:hover:not(:disabled) { background: #1565c0; color: #fff; }
+.btn-quit { border-color: var(--bad); color: var(--bad); }
+.btn-sm { padding: 3px 9px; font-size: 9.5px; }
+.btn-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.err-box { margin-top: 8px; }
+
+#rightcol { display: flex; flex-direction: column; gap: 10px; min-width: 0; min-height: 0; }
+#phasebar { flex: none; }
+#phasebar:empty { display: none; }
+.phase-box { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 10.5px; }
+.phase-box .cd { font-family: var(--mono); font-size: 13px; font-weight: 700; color: var(--good); min-width: 48px; }
+.rec-dot { color: var(--good); animation: pulse 1.2s infinite; font-weight: 700; }
+#panel { flex: 0 1 auto; overflow-y: auto; max-height: 55%; min-height: 118px; }
+/* HS + MS side by side; fixed height inside the viewport, no stretch from content */
+#live { flex: 1 1 0; min-height: 260px; display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: minmax(0, 1fr); gap: 10px; margin: 0; }
+.live-panel { margin: 0; padding: 8px 10px; display: flex; flex-direction: column; min-width: 0; min-height: 0; border-left: 3px solid var(--border); }
+.live-panel.hl { border-left-color: var(--primary); background: var(--highlight); }
+.live-head { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; flex: none; }
+.live-head .lstat { margin-left: auto; color: var(--muted); font-size: 9.5px; }
+.live-head .muted { font-size: 9.5px; }
+.lopen { display: none; }
+.lopen.show { display: inline-block; }
+.lrows { width: 52px; font-family: var(--mono); font-size: 9.5px; padding: 2px 4px; text-align: right; }
+/* TX: one-shot send + saved quick list */
+.txrow { display: flex; flex-wrap: wrap; gap: 5px; flex: none; margin-top: 6px; }
+.tx-in { font-family: var(--mono); font-size: 9.5px; padding: 3px 6px; width: 90px; }
+.tx-in-data { flex: 1; min-width: 104px; width: auto; }
+.txfill { font-size: 9.5px; color: var(--good); font-weight: 600; }
+.txfill.err { color: var(--bad); }
+.txpresets { flex: none; margin-top: 5px; display: flex; flex-direction: column; gap: 3px; font-size: 9.5px; max-height: 62px; overflow-y: auto; }
+.txpre { display: flex; align-items: center; gap: 5px; }
+.txpre .mono { color: var(--primary); }
+.btn-xs { padding: 1px 6px; font-size: 9px; }
+.live-scroll { flex: 1 1 0; min-height: 96px; overflow: auto; border: 1px solid var(--border); border-radius: 4px; background: #fff; margin-top: 6px; }
+.live-table { margin: 0; font-size: 9.5px; }
+.live-table th { padding: 3px 7px; font-size: 9px; border: none; border-bottom: 1px solid var(--border); }
+.live-table td { padding: 2px 7px; border: none; border-bottom: 1px solid #eee; white-space: nowrap; font-family: var(--mono); font-size: 9.5px; }
+.live-table td.t-data { color: #1565c0; }
+.nolink { display: none; margin-top: 5px; color: var(--muted); font-size: 9.5px; flex: none; }
+.nolink.show { display: block; }
+#logs { margin-top: 12px; }
+#logs details { border: 1px solid var(--border); border-radius: 5px; margin-bottom: 6px; background: #fff; }
+#logs summary { cursor: pointer; padding: 7px 11px; display: flex; gap: 10px; align-items: baseline; font-size: 10.5px; }
+#logs summary:hover { background: var(--hover); }
+.ls-name { color: var(--primary); font-weight: 600; }
+.log-table { margin: 0 10px 10px; }
+.file-link { margin-right: 4px; text-decoration: none; border-bottom: 1px dashed var(--primary); }
+.file-link:hover { background: var(--highlight); }
+.dl { margin: 0 9px 0 4px; font-size: 9.5px; }
+#modal { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.35); display: none; z-index: 50; }
+#modal.open { display: block; }
+.modal-box {
+  position: absolute; top: 4vh; left: 50%; transform: translateX(-50%);
+  width: min(920px, 94vw); height: 88vh; background: #fff;
+  border: 1px solid var(--border); border-radius: 8px; display: flex; flex-direction: column;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+}
+.modal-head { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 11px; }
+.modal-head .mtitle { flex: 1; font-weight: 600; word-break: break-all; color: var(--primary); }
+#modal-body { flex: 1; overflow: auto; background: #fff; color: var(--fg); border-left: none; }
+#modal-body.critical { background: var(--bad-bg); color: var(--bad); }
+.footer { margin: 0; padding: 10px 0 4px; border-top: 1px solid var(--border); color: #888; font-size: 9.5px; text-align: center; }
+@media (max-width: 900px) {
+  #main { grid-template-columns: 1fr; height: auto; min-height: 0; }
+  #steps { max-height: 40vh; }
+  #panel { max-height: none; }
+  #live { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<header id="topbar">
+  <h1>CANDuctor — CAN data collection</h1>
+  <div id="topline">
+    <span id="sess-badge" class="st-badge st-idle">idle</span>
+    <span id="devchips"></span>
+  </div>
+</header>
+<div id="main">
+  <aside id="steps" class="panel">
+    <h2 id="steps-h">Scenario:</h2>
+    <div id="steps-list"><div class="muted small">Loading…</div></div>
+  </aside>
+  <div id="rightcol">
+    <section id="phasebar" class="panel"></section>
+    <section id="panel" class="panel"><div class="muted small">Loading…</div></section>
+    <section id="live"></section>
+  </div>
+</div>
+<section id="logs" class="panel">
+  <h2>Collected data</h2>
+  <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px">
+    <button id="logs-refresh" class="btn btn-sm">↻ Refresh</button>
+    <span id="logs-new" class="muted small" style="display:none">new recordings — scroll or refresh</span>
+    <span id="logs-root" class="muted small mono"></span>
+  </div>
+  <div id="logs-body"><div class="muted small">Loading…</div></div>
+</section>
+<div id="modal">
+  <div class="modal-box">
+    <div class="modal-head">
+      <span class="mtitle mono" id="modal-title"></span>
+      <button id="modal-close" class="btn btn-sm" title="Close">×</button>
+    </div>
+    <pre id="modal-body"></pre>
+  </div>
+</div>
+<footer class="footer">CANDuctor web UI · link: <a class="mono" href="https://canductor.ktkd.ru" target="_blank" rel="noopener">canductor.ktkd.ru</a></footer>
+</body>
+<script>
+'use strict';
+// --- last-seen session count for the "new recordings" hint ------------------
+let _lastSessionCount = -1;
+
+const API = '';
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) =>
+  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+const state = {
+  scenarios: [], scenName: '', scen: null,
+  ses: null,
+  live: {},   // alias -> {rows,total,unique:Set,fps:[],paused}
+  conn: {},   // alias -> EventSource
+  stream: null,
+  pollT: null,
+  tickT: null,
+  skipped: new Map(),
+  busy: false,
+  lastPanel: null,   // {type, key} — what was rendered last, for in-flight form carry-over
+};
+
+// --- api ------------------------------------------------------------------
+async function jreq(u, o = {}) {
+  const r = await fetch(API + u, o);
+  let j = null;
+  try { j = await r.json(); } catch (e) { throw new Error('HTTP ' + r.status + ' (not JSON)'); }
+  if (!r.ok) throw new Error((j && j.error) || ('HTTP ' + r.status));
+  return j;
+}
+const post = (u, b) => jreq(u, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(b) });
+
+// --- live ring buffer: configurable max rows per bus (localStorage, default 100) ----
+const LIVE_ROWS_DEFAULT = 100;
+const LIVE_THROTTLE_MS = 100;   // display stream window (server-side decimation)
+function maxRows(alias) {
+  try {
+    const v = parseInt(localStorage.getItem('canductor.rows.' + alias) || '', 10);
+    if (v >= 10 && v <= 1000) return v;
+  } catch (_) {}
+  return LIVE_ROWS_DEFAULT;
+}
+function setMaxRows(alias, n) {
+  n = Math.max(10, Math.min(1000, Math.round(Number(n) || LIVE_ROWS_DEFAULT)));
+  try { localStorage.setItem('canductor.rows.' + alias, String(n)); } catch (_) {}
+  const inp = $('lrlim-' + alias); if (inp) inp.value = n;
+  const L = state.live[alias];
+  if (L) {
+    const cap = n * 3 + 20;
+    while (L.rows.length > cap) L.rows.shift();
+    L.dirty = true;   // table rebuilds on the next flush
+  }
+}
+
+// --- live display: pushFrame = cheap buffering only; the DOM is rebuilt once per
+//     ~100 ms flush (below), not per SSE message. A real bus is ~100-400 msg/s:
+//     per-message DOM work (rebuild + reflow) used to saturate the tab's main
+//     thread, which froze the page and made the live panels look dead.          ---
+function pushFrame(alias, f) {
+  const L = state.live[alias] || (state.live[alias] = { rows: [], total: 0, unique: new Set(), fps: [], paused: false, dirty: false });
+  // payload: a single frame (legacy stream) or a throttle batch {total, frames[]}
+  let n = 1,
+      frs = [f];
+  if (Array.isArray(f.frames)) { n = f.total | 0; frs = f.frames; }
+  L.total += n;
+  L.fps.push({ t: Date.now(), n: n });
+  if (L.fps.length > 600) L.fps.shift();
+  for (const fr of frs) L.unique.add(fr.id);
+  if (L.paused || !frs.length) return;
+  for (const fr of frs) L.rows.push(fr);
+  const cap = maxRows(alias) * 3 + 20;
+  while (L.rows.length > cap) L.rows.shift();
+  L.dirty = true;
+}
+function flushLive() {
+  for (const a of Object.keys(state.live)) {
+    const L = state.live[a];
+    if (L && L.dirty) {
+      L.dirty = false;
+      renderLiveTable(a);
+    }
+  }
+}
+(function liveLoop() {
+  let last = 0;
+  const tick = (now) => {
+    if (now - last >= LIVE_THROTTLE_MS) {   // rAF pauses on a hidden tab → no DOM work there
+      last = now;
+      flushLive();
+    }
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+})();
+function renderLiveTable(alias) {
+  const L = state.live[alias];
+  const tb = $('lrows-' + alias);
+  if (!L || !tb) return;
+  const sc = $('lscroll-' + alias);
+  const atBottom = sc ? (sc.scrollTop + sc.clientHeight >= sc.scrollHeight - 8) : true;
+  const tail = L.rows.slice(-maxRows(alias));
+  tb.innerHTML = tail.map((f) =>
+    '<tr><td>' + fmtTimeMs(f.ts) + '</td><td>0x' + esc(f.id_hex) + '</td><td>' + esc(f.dlc) + '</td><td class="t-data">' + esc(hexGroups(f.data)) + '</td></tr>'
+  ).join('');
+  if (atBottom && sc) sc.scrollTop = sc.scrollHeight;
+}
+function updateLiveStats(alias) {
+  const L = state.live[alias]; const el = $('lstat-' + alias);
+  if (!L || !el) return;
+  const now = Date.now();
+  while (L.fps.length && now - L.fps[0].t > 1000) L.fps.shift();
+  let fps = 0;
+  for (const e of L.fps) fps += e.n;
+  el.textContent = 'frames ' + L.total + ' · ID ' + L.unique.size + ' · ~' + fps + ' fps' + (L.paused ? ' · PAUSED' : '');
+}
+function toggleLivePause(alias) {
+  const L = state.live[alias] || (state.live[alias] = { rows: [], total: 0, unique: new Set(), fps: [], paused: false, dirty: false });
+  L.paused = !L.paused;
+  const b = $('lbtn-' + alias); if (b) b.textContent = L.paused ? '▶ continue' : '⏸ pause';
+  if (!L.paused) L.dirty = true;   // one table rebuild on the next flush (no per-row reflow)
+  updateLiveStats(alias);
+}
+
+// --- fmt ------------------------------------------------------------------
+function fmtTimeMs(ts) { const d = new Date(ts * 1000); return d.toTimeString().slice(0, 8) + '.' + String(Math.floor(d.getMilliseconds())).padStart(3, '0'); }
+function hexGroups(h) { return String(h || '').replace(/(.{2})/g, '$1 ').trim(); }
+function fmtSize(n) { n = Number(n) || 0; if (n < 1024) return n + ' B'; if (n < 1048576) return (n / 1024).toFixed(1) + ' KB'; return (n / 1048576).toFixed(2) + ' MB'; }
+function fmtBaud(b) { return b ? Math.round(b / 1000) + ' kbit/s' : ''; }
+
+// --- rsync / SSE --------------------------------------------------------------
+async function sync() {
+  try {
+    state.ses = await jreq('/api/session/status');
+    if (!Object.keys(state.conn).length && Object.keys((state.ses && state.ses.devices) || {}).length)
+      buildLivePanes();
+    renderAll(state.ses);
+  } catch (e) { console.warn('sync:', e); }
+}
+function openStream() {
+  if (state.stream) { try { state.stream.close(); } catch (e) {} }
+  const es = new EventSource(API + '/api/session/stream');
+  es.onmessage = (m) => {
+    let e; try { e = JSON.parse(m.data); } catch (err) { return; }
+    handleEvent(e);
+  };
+  es.onopen = () => { sync(); refreshLogs(); };   // rsync on every (re)connect
+  es.onerror = () => { /* EventSource reconnects by itself */ };
+  state.stream = es;
+}
+function handleEvent(e) {
+  if (!e || !e.type) return;
+  const s = state.ses || {
+    session_state: 'idle', plan: [], summary: {}, card: null, phase: null, done: [], last_error: ''
+  };
+  switch (e.type) {
+    case 'status':
+      state.ses = Object.assign({}, s, e.state || {});  // e.state has no devices — keep the old ones
+      renderAll(state.ses); break;
+    case 'session_start':
+      state.ses = {...s, session_state: 'running', plan: e.plan || [], summary: e.summary || {}, done: [], card: null, phase: null};
+      state.skipped.clear(); renderAll(state.ses); refreshLogs();
+      if (e.summary && e.summary.scenario && e.summary.scenario !== state.scenName) loadScenario(e.summary.scenario);
+      break;
+    case 'card':
+      state.ses = {...s, session_state: 'waiting', card: e.card, phase: null}; renderAll(state.ses); break;
+    case 'phase':
+      state.ses = {...s, session_state: 'recording', phase: {test_id: e.test_id, car: e.car, name: e.phase, until: e.until, dur: e.dur}};
+      renderAll(state.ses); break;
+    case 'pause':
+      state.ses = {...s, session_state: 'paused', phase: null, pauseDur: e.dur || 0, pauseUntil: e.until || 0}; renderAll(state.ses); break;
+    case 'done':
+      state.ses = {...s, done: [...(s.done || []), {test: e.test, car: e.car, rep: e.rep, dir: e.dir, rel: e.rel, report: e.report, session: e.session}]};
+      renderAll(state.ses); refreshLogs(); break;
+    case 'skipped': {
+      const c = e.card || {};
+      state.skipped.set([c.test_id, c.car, c.rep].join('::'), true);
+      state.ses = {...s, session_state: 'idle', card: c, phase: null}; renderAll(state.ses); break;
+    }
+    case 'session_done':
+      state.ses = {...s, session_state: 'done', phase: null, card: null}; renderAll(state.ses); refreshLogs(); break;
+    case 'error':
+      state.ses = {...s, session_state: 'error', last_error: e.message || ''}; renderAll(state.ses); break;
+    case 'log': break;
+  }
+}
+function renderAll(s) {
+  try {
+    if (!s) return;
+    renderStatus(s); renderSteps(s); renderPanel(s); renderPhaseBar(s); renderLiveHighlight(s);
+  } catch (e) {
+    console.error('render:', e);
+    try { $('panel').innerHTML = '<div class="critical">Render error: ' + esc(e && e.message || e) + '</div>'; } catch (_) {}
+  }
+}
+// --- status / devices ---------------------------------------------------------
+const ST_BADGE = {
+  idle: ['st-idle', 'idle'], running: ['st-run', 'running'], waiting: ['st-run', 'waiting — confirm'],
+  recording: ['st-rec', 'recording'], paused: ['st-paused', 'paused'], done: ['st-done', 'done'], error: ['st-error', 'error'],
+};
+function renderStatus(s) {
+  const b = $('sess-badge'); if (!b) return;
+  const m = ST_BADGE[s.session_state] || ['st-idle', s.session_state];
+  b.className = 'st-badge ' + m[0]; b.textContent = m[1];
+  const host = $('devchips'); if (!host) return;
+  host.innerHTML = Object.entries(s.devices || {}).map(([a, d]) => {
+    const cls = a.toLowerCase() === 'ms' ? 'badge-ms' : 'badge-hs';
+    const sCls = d.state === 'error' ? 'chip-state err' : (d.state === 'configured' ? 'chip-state ok' : 'chip-state');
+    return '<span class="chip"><span class="badge ' + cls + '">' + esc(a.toUpperCase()) + '</span>'
+      + '<span class="' + sCls + '">' + esc(d.state || '?') + '</span>'
+      + '<span class="mono chip-rx">rx ' +esc(d.rx ?? 0) + '</span>'
+      + '<span class="muted small">' + esc(fmtBaud(d.config && d.config.can_baud)) + '</span>'
+      + '</span>';
+  }).join('');
+}
+function testById(id) {
+  for (const st of (state.scen && state.scen.stages) || [])
+    for (const t of st.tests || []) if (t.id === id) return t;
+  return null;
+}
+async function loadScenario(name) {
+  try { state.scen = await jreq('/api/scenario?name=' + encodeURIComponent(name)); state.scenName = name; if (state.ses) renderSteps(state.ses); } catch (e) { console.warn('scenario view:', e); }
+}
+function stepRows(s) {
+  const rows = [];
+  if (s.plan && s.plan.length) {
+    s.plan.forEach((p) => {
+      const t = testById(p.id) || {};
+      const repTotal = s.plan.filter((x) => x.id === p.id && x.car === p.car).length || 1;
+      rows.push({ key: [p.id, p.car, p.rep].join('::'), id: p.id, car: p.car, rep: p.rep, repTotal,
+                  title: t.title || p.id, bus: t.bus || [], kind: t.kind || '', duration: (t.duration === null ? 'open' : t.duration ?? 0) });
+    });
+  } else if (state.scen) {
+    const reps = (state.scen.rules && state.scen.rules.repeats) || 1;
+    state.scen.stages.forEach((st) => (st.tests || []).forEach((t) => rows.push({
+      key: [t.id, (t.car || []).join(','), 0].join('::'), id: t.id, car: (t.car || []).join(', '), rep: 0, repTotal: reps,
+      title: t.title, bus: t.bus || [], kind: t.kind || '', duration: (t.duration === null ? 'open' : t.duration ?? 0)
+    })));
+  }
+  return rows;
+}
+function renderSteps(s) {
+  const el = $('steps-list'); if (!el) return;
+  const h2 = $('steps-h'); if (h2) h2.textContent = 'Scenario' + (state.scenName ? ': ' + state.scenName : '');
+  const rows = stepRows(s);
+  if (!rows.length) { el.innerHTML = '<div class="muted small">No scenario loaded</div>'; return; }
+  const done = new Set((s.done || []).map((d) => [d.test, d.car, d.rep].join('::')));
+  const card = s.session_state === 'done' ? null : s.card;
+  el.innerHTML = rows.map((r) => {
+    const cur = !!(card && card.test_id === r.id && (!card.car || card.car === r.car) && (r.rep === 0 || card.rep === r.rep));
+    const dn = done.has(r.key), sk = state.skipped.has(r.key);
+    const cls = 'step' + (cur ? ' step-cur' : dn ? ' step-done' : sk ? ' step-skip' : '');
+    const mark = cur ? '●' : dn ? '✓' : sk ? '—' : '';
+    const repTxt = r.rep > 0 ? ' · rep ' + r.rep + '/' + r.repTotal : '';
+    return '<div class="' + cls + '" data-key="' + esc(r.key) + '">'
+      + '<span class="step-mark">' + mark + '</span>'
+      + '<span class="step-id">' + esc(r.id) + '</span>'
+      + (r.bus || []).map((b) => '<span class="badge ' + (b === 'ms' ? 'badge-ms' : 'badge-hs') + '">' + esc(b.toUpperCase()) + '</span>').join(' ')
+      + '<span class="step-meta">'
+      + (r.car ? esc(r.car) : '') + repTxt + ' · ' + ((r.duration === 'open') ? 'open' : Number(r.duration || 0) + 's')
+      + (r.kind ? ' · ' + esc(r.kind) : '')
+      + '</span>'
+      + '<div class="step-title">' + esc(r.title) + '</div>'
+      + '</div>';
+  }).join('');
+  el.querySelectorAll('.step').forEach((row) => row.addEventListener('click', () => {
+    if (s.session_state === 'waiting' && s.card) {
+      const p = $('panel'); if (p) p.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }));
+}
+async function doCmd(action, note) {
+  if (state.busy) return;
+  state.busy = true;
+  const btns = ['b-start', 'b-skip', 'b-quit'].map((id) => $(id)).filter(Boolean);
+  btns.forEach((b) => { b.disabled = true; });
+  try {
+    await post('/api/session/cmd', note ? { action, note } : { action });
+  } catch (e) {
+    const eb = $('card-err');
+    if (eb) eb.innerHTML = '<div class="critical">Command not sent: ' + esc(e.message) + '</div>';
+  } finally {
+    state.busy = false;
+    btns.forEach((b) => { b.disabled = false; });
+  }
+}
+function renderTestInfo(s) {
+  const p = $('panel'); if (!p) return;
+  const label = { running: 'Starting test…', recording: 'Recording in progress', paused: 'Pause between tests' }[s.session_state] || esc(s.session_state);
+  const cur = s.phase || s.card;
+  const done = new Set((s.done || []).map((d) => [d.test, d.car, d.rep].join('::')));
+  const total = (s.plan || []).length;
+  let html = '<div class="card-head"><h2>' + label + '</h2>'
+    + (cur ? '<span class="badge badge-verify">current: ' + esc(cur.test_id) + ' · car=' + esc(cur.car) + '</span>' : '')
+    + (total ? '<span class="badge">completed ' + (done.size + state.skipped.size) + '/' + total + '</span>' : '')
+    + '</div>';
+  if (s.session_state === 'recording' && s.phase)
+    html += '<div class="kv">phase: <b>' + esc(s.phase.name) + '</b> · ~' + Math.round(s.phase.dur || 0) + 's</div>';
+  if (s.session_state === 'paused')
+    html += '<div class="kv">pause ~' + Math.round(s.pauseDur || 0) + 's, then next test</div>';
+  html += '<div class="info">start/skip/quit commands during a phase are queued and applied on the next card.</div>';
+  p.innerHTML = html;
+}
+function renderDone(s) {
+  const p = $('panel'); if (!p) return;
+  const out = (s.summary && s.summary.out) || '';
+  let html = '<div class="success"><b>Session finished.</b> ' + (out ? ' Storage: <code>' + esc(out) + '</code>' : '') + '</div>'
+    + '<div class="kv">Tests recorded: <b>' + ((s.done || []).length) + '</b> · skipped: <b>' + state.skipped.size + '</b></div>';
+  if ((s.done || []).length) {
+    html += '<table class="log-table"><thead><tr><th>test</th><th>car</th><th>rep</th><th>dir</th></tr></thead><tbody>'
+      + (s.done || []).map((d) => '<tr><td class="mono">' + esc(d.test) + '</td><td>' + esc(d.car) + '</td><td class="mono">' + esc(d.rep) + '</td><td class="mono small">' + esc(d.rel || '') + '</td></tr>').join('')
+      + '</tbody></table>';
+  }
+  html += '<div class="btn-row"><button id="b-new" class="btn">New session</button></div>';
+  p.innerHTML = html;
+  const b = $('b-new');
+  if (b) b.addEventListener('click', () => {
+    state.ses = {...state.ses, session_state: 'idle', plan: [], summary: {}, card: null, phase: null, done: [], last_error: ''};
+    state.skipped.clear();
+    renderAll(state.ses);   // full re-render — the status badge included
+  });
+}
+// --- form carry-over across re-renders -------------------------------------------
+// The waiting card / session form is re-painted by every rsync (5s foreground /
+// 10s background), every 'status' SSE event and on stream reconnect. Without this,
+// in-flight input (coolant / ambient / engine state / comment) gets wiped mid-typing.
+// Snapshot the values before the innerHTML rebuild and restore them (with focus and
+// the cursor) after; a different card or form starts with defaults.
+function fieldVal(id) { const el = $(id); return el ? el.value : ''; }
+function formSnapshot(ids, type, key) {
+  const wasSame = state.lastPanel && state.lastPanel.type === type && state.lastPanel.key === key;
+  const prev = {};
+  ids.forEach((id) => { prev[id] = (wasSame && fieldVal(id)) || ''; });
+  return { prev, prevFocus: (document.activeElement && document.activeElement.id) || '' };
+}
+function formRestore(type, key, f) {
+  Object.keys(f.prev).forEach((id) => {
+    const el = $(id); if (el && f.prev[id]) el.value = f.prev[id];
+  });
+  if (f.prevFocus) {
+    const el = $(f.prevFocus);
+    if (el) { el.focus(); try { const n = el.value.length; el.setSelectionRange(n, n); } catch (_) {} }
+  }
+  state.lastPanel = { type, key };
+}
+function renderPanel(s) {
+  const p = $('panel'); if (!p) return;
+  if (s.session_state === 'waiting' && s.card) { renderCard(s); return; }
+  if (s.session_state === 'idle' || s.session_state === 'error') { renderSessionStart(s); return; }
+  if (s.session_state === 'done') { renderDone(s); return; }
+  renderTestInfo(s);
+}
+function renderCard(s) {
+  const c = s.card; const p = $('panel');
+  const ckey = [c.test_id, c.car, (c.rep || 0)].join('|');
+  const form = formSnapshot(['f-coolant', 'f-air', 'f-engine', 'f-comment'], 'card', ckey);
+  const carLabel = (state.scen && state.scen.cars && state.scen.cars[c.car]) ? state.scen.cars[c.car].label : c.car;
+  let html = '<div class="card-head"><h2>Test ' + esc(c.test_id) + ' · ' + esc(c.title) + '</h2>'
+    + '<span class="badge">' + esc(carLabel) + '</span>'
+    + (c.rep ? '<span class="badge badge-verify">rep ' + esc(c.rep) + '/' + esc(c.rep_total) + '</span>' : '')
+    + '<span class="badge">' + ((c.duration === null || c.duration === undefined) ? 'open' : Number(c.duration || 0) + 's') + '</span>'
+    + '<span class="badge' + (c.kind === 'action' ? ' badge-critical' : '') + '">' + esc(c.kind || '') + '</span>'
+    + (c.buses && c.buses.length ? '<span class="muted small" style="margin-left:6px">record:</span> ' + (c.buses || []).map((b) => '<span class="badge ' + (b === 'ms' ? 'badge-ms' : 'badge-hs') + '">' + esc(b.toUpperCase()) + '</span>').join('') : '') + '</div>';
+  if (c.stage_title) html += '<div class="kv muted small">Stage: ' + esc(c.stage_title) + '</div>';
+  if (c.warn) html += '<div class="warning"><b>⚠</b> ' + esc(c.warn) + '</div>';
+  if (c.do) html += '<div class="card-do">Action: <b>' + esc(c.do) + '</b></div>';
+  if (c.checks && c.checks.length)
+    html += '<div class="kv">Expected IDs: ' + c.checks.map((x) => '<span class="badge mono">' + esc(x) + '</span>').join(' ') + '</div>';
+  if (c.file_preview) html += '<div class="kv">Log file (preview): <code>' + esc(c.file_preview) + '</code></div>';
+  html += '<div class="form-row">'
+    + '<div class="field"><label>Coolant, °C</label><input id="f-coolant" type="number" placeholder="90"></div>'
+    + '<div class="field"><label>Ambient, °C</label><input id="f-air" type="number" placeholder="25"></div>'
+    + '<div class="field"><label>Engine state</label><select id="f-engine"><option>cold</option><option>warm</option><option selected>—</option></select></div>'
+    + '</div>'
+    + '<div class="field"><label>Comment (for the protocol)</label><textarea id="f-comment" placeholder="goal, condition, anomalies…"></textarea></div>'
+    + '<div class="btn-row">'
+    + '<button id="b-start" class="btn btn-go">▶ Start test</button>'
+    + '<button id="b-skip" class="btn btn-skip">⏭ Skip</button>'
+    + '<button id="b-quit" class="btn btn-quit">✕ End session</button>'
+    + '</div><div class="err-box" id="card-err"></div>';
+  p.innerHTML = html;
+  formRestore('card', ckey, form);
+  $('b-start').addEventListener('click', () => doCmd('start', {
+    coolant: $('f-coolant').value, air: $('f-air').value, engine: $('f-engine').value, comment: $('f-comment').value
+  }));
+  $('b-skip').addEventListener('click', () => doCmd('skip'));
+  $('b-quit').addEventListener('click', () => doCmd('quit'));
+}
+function renderSessionStart(s) {
+  const p = $('panel'); if (!p) return;
+  const form = formSnapshot(['ss-name', 'ss-reps', 'ss-scale', 'ss-only', 'ss-cars', 'ss-buses'], 'ss', '');
+  let html = '<div class="card-head"><h2>New session</h2>'
+    + (s.summary && s.summary.scenario ? '<span class="badge">previous: ' + esc(s.summary.scenario) + '</span>' : '')
+    + '</div>';
+  if (s.session_state === 'error') html += '<div class="critical"><b>Session error:</b> ' + esc(s.last_error || 'unknown') + '</div>';
+  html += '<div class="info">Protocol: every test runs 3 phases — <b>quiet</b> (stable state) → <b>action</b> (target action) → <b>after</b> (post-action). Between tests — a pause. The operator confirms each test (this card).</div>';
+  if (!state.scenarios.length) {
+    html += '<div class="warning">No scenarios. <button id="b-retry-scen" class="btn btn-sm">↻ retry</button></div>';
+  } else {
+    html += '<div class="form-row">'
+      + '<div class="field"><label>Scenario</label><select id="ss-name"><option value="">—</option>'
+      + state.scenarios.map((n) => '<option value="' + esc(n) + '"' + (n === state.scenName ? ' selected' : '') + '>' + esc(n) + '</option>').join('')
+      + '</select></div>'
+      + '<div class="field"><label>Repeats</label><input id="ss-reps" type="number" min="1" value="1"></div>'
+      + '<div class="field"><label>Scale (durations)</label><input id="ss-scale" type="number" step="0.05" value="1"></div>'
+      + '</div><div class="form-row">'
+      + '<div class="field" style="flex:1"><label>Only (test ids, comma-separated)</label><input id="ss-only" placeholder="1.1, 1.2"><span class="muted small">empty — all</span></div>'
+      + '<div class="field" style="flex:1"><label>Cars</label><input id="ss-cars" placeholder="car1, car2"><span class="muted small">empty — all</span></div>'
+      + '<div class="field" style="flex:1"><label>Buses</label><input id="ss-buses" placeholder="hs, ms"><span class="muted small">empty — all</span></div>'
+      + '</div><div class="btn-row"><button id="b-startsess" class="btn btn-go">▶ Start session</button></div>'
+      + '<div class="err-box" id="start-err"></div>';
+  }
+  p.innerHTML = html;
+  formRestore('ss', '', form);
+  const rs = $('b-retry-scen');
+  if (rs) rs.addEventListener('click', () => { state.stream ? openStream() : null; sync(); });
+  const sel = $('ss-name');
+  if (sel) sel.addEventListener('change', () => {
+    if (sel.value) loadScenario(sel.value);              // steps update right away
+    else { state.scen = null; state.scenName = ''; renderSteps(state.ses); }
+  });
+  const btn = $('b-startsess');
+  if (btn) btn.addEventListener('click', async () => {
+    if (state.busy) return;
+    if (!$('ss-name').value) { $('start-err').innerHTML = '<div class="warning">Select a scenario first.</div>'; return; }
+    state.busy = true; btn.disabled = true;
+    try {
+      await post('/api/session/start', {
+        scenario: $('ss-name').value,
+        repeats: parseInt($('ss-reps').value, 10) || 1,
+        scale: parseFloat($('ss-scale').value) || 1,
+        only: $('ss-only').value, cars: $('ss-cars').value, buses: $('ss-buses').value,
+      });
+    } catch (e) {
+      $('start-err').innerHTML = '<div class="warning">' + esc(e.message) + ' — if the session is already running, refresh the page.</div>';
+      btn.disabled = false;
+    } finally { state.busy = false; }
+  });
+}
+function openDevice(alias) {
+  if (state.conn[alias]) { try { state.conn[alias].close(); } catch (_) {} }
+  const es = new EventSource(API + '/devices/' + alias + '/stream?throttle=' + LIVE_THROTTLE_MS);
+  es.onmessage = (m) => {
+    let txt = (m.data || '').trim();
+    if (txt.startsWith('data:')) txt = txt.slice(5).trim();
+    if (!txt) return;
+    let f; try { f = JSON.parse(txt); } catch (_) { return; }
+    pushFrame(alias, f);
+  };
+  state.conn[alias] = es;
+}
+// --- TX: one-shot send + saved quick list (localStorage) -------------------------
+function txLoad(alias) {
+  try { const x = JSON.parse(localStorage.getItem('canductor.tx.' + alias) || '[]'); return Array.isArray(x) ? x : []; }
+  catch (_) { return []; }
+}
+function txStore(alias, arr) { try { localStorage.setItem('canductor.tx.' + alias, JSON.stringify(arr)); } catch (_) {}
+}
+function txIdVal(str) {
+  const t = String(str || '').trim().toLowerCase().replace(/^0x/, '');
+  if (!/^[0-9a-f]{1,8}$/.test(t)) return null;
+  return parseInt(t, 16);
+}
+function txDataVal(str) {
+  const t = String(str || '').replace(/[\s-]/g, '');
+  if (t.length > 16 || !/^[0-9a-f]*$/i.test(t)) return null;
+  return t;
+}
+function txFill(alias, text, err) {
+  const f = $('txf-' + alias); if (!f) return;
+  f.textContent = text;
+  f.classList.toggle('err', !!err);
+}
+async function txSend(alias, id, data) {
+  try {
+    await post('/devices/' + alias + '/send', { id: id, data: data || '', ext: id > 0x7FF, remote: false });
+    txFill(alias, 'TX ok · 0x' + id.toString(16).toUpperCase() + ' · ' + Math.ceil((data || '').length / 2) + ' B');
+  } catch (e) {
+    txFill(alias, 'TX error: ' + e.message, true);
+  }
+}
+function txFromInputs(alias) {
+  const id = txIdVal($('txid-' + alias) ? $('txid-' + alias).value : '');
+  const data = txDataVal($('txdata-' + alias) ? $('txdata-' + alias).value : '');
+  if (id === null) { txFill(alias, 'ID: hex 1..8 chars (0x optional)', true); return; }
+  if (data === null) { txFill(alias, 'DATA: hex, max 16 chars', true); return; }
+  txSend(alias, id, data);
+}
+function txAddPreset(alias) {
+  const id = txIdVal($('txid-' + alias) ? $('txid-' + alias).value : '');
+  const data = txDataVal($('txdata-' + alias) ? $('txdata-' + alias).value : '');
+  if (id === null) { txFill(alias, 'ID: hex 1..8 chars (0x optional)', true); return; }
+  if (data === null) { txFill(alias, 'DATA: hex, max 16 chars', true); return; }
+  const arr = txLoad(alias);
+  if (arr.length >= 8) { txFill(alias, 'max 8 saved messages', true); return; }
+  if (!arr.some((p) => p.id === id && p.data === data)) arr.push({ id: id, data: data });
+  txStore(alias, arr);
+  if ($('txid-' + alias)) $('txid-' + alias).value = '';
+  if ($('txdata-' + alias)) $('txdata-' + alias).value = '';
+  txFill(alias, 'saved → quick list');
+  renderTxPresets(alias);
+}
+function txDelPreset(alias, i) {
+  const arr = txLoad(alias); arr.splice(i, 1); txStore(alias, arr); renderTxPresets(alias);
+}
+function renderTxPresets(alias) {
+  const host = $('txp-' + alias); if (!host) return;
+  const arr = txLoad(alias);
+  if (!arr.length) {
+    host.innerHTML = '<span class="muted">no saved messages — fill ID/DATA and press “+ save”</span>';
+    return;
+  }
+  host.innerHTML = arr.map((p, i) =>
+    '<span class="txpre"><span class="mono">0x' + p.id.toString(16).toUpperCase() + ' ' + hexGroups(p.data) + '</span>'
+    + '<button class="btn btn-xs" data-txs="' + i + '">send</button>'
+    + '<button class="btn btn-xs" data-txd="' + i + '">×</button></span>'
+  ).join('');
+  host.querySelectorAll('[data-txs]').forEach((b) => b.addEventListener('click', () => {
+    const p = arr[Number(b.getAttribute('data-txs'))]; if (p) txSend(alias, p.id, p.data);
+  }));
+  host.querySelectorAll('[data-txd]').forEach((b) => b.addEventListener('click', () => {
+    txDelPreset(alias, Number(b.getAttribute('data-txd')));
+  }));
+}
+async function txOpenDevice(alias) {
+  txFill(alias, 'opening device…');
+  try {
+    await post('/devices/' + alias + '/open', {});
+    await sync();
+    txFill(alias, 'opened (default cfg) — send is ok');
+  } catch (e) {
+    txFill(alias, 'open: ' + e.message, true);
+  }
+}
+function buildLivePanes() {
+  const host = $('live'); if (!host) return;
+  host.innerHTML = '';
+  Object.entries((state.ses && state.ses.devices) || {}).forEach(([a, d]) => {
+    const busCfg = state.scen && state.scen.buses ? state.scen.buses[a] : null;
+    const label = busCfg ? busCfg.label : (a + ' · live');
+    host.insertAdjacentHTML('beforeend',
+      '<section class="panel live-panel" id="live-' + esc(a) + '">'
+      + '<div class="live-head">'
+      + '<span class="badge ' + (a.toLowerCase() === 'ms' ? 'badge-ms' : 'badge-hs') + '">' + esc(a.toUpperCase()) + '</span>'
+      + '<span class="muted">' + esc(label) + '</span>'
+      + '<button class="btn btn-xs lopen' + (d.state === 'init' ? ' show' : '') + '" id="lopen-' + esc(a) + '">open</button>'
+      + '<span class="lstat mono" id="lstat-' + esc(a) + '"></span>'
+      + '<input id="lrlim-' + esc(a) + '" class="lrows" type="number" min="10" max="1000" step="10" value="' + maxRows(a) + '" title="Max rows (buffer size)">' 
+      + '<button class="btn btn-sm" id="lbtn-' + esc(a) + '">⏸ pause</button>'
+      + '</div>'
+      + '<div class="txrow">'
+      + '<input id="txid-' + esc(a) + '" class="tx-in" placeholder="ID hex (0x optional)" maxlength="10">'
+      + '<input id="txdata-' + esc(a) + '" class="tx-in tx-in-data" placeholder="DATA hex (max 16 chars)" maxlength="16">'
+      + '<button class="btn btn-xs btn-go" id="txsend-' + esc(a) + '">Send</button>'
+      + '<button class="btn btn-xs" id="txsave-' + esc(a) + '">+ save</button>'
+      + '<span class="txfill" id="txf-' + esc(a) + '"></span>'
+      + '</div>'
+      + '<div class="txpresets" id="txp-' + esc(a) + '"></div>'
+      + '<div class="live-scroll" id="lscroll-' + esc(a) + '">'
+      + '<table class="live-table"><thead><tr><th>time</th><th>ID</th><th>DLC</th><th>data</th></tr></thead>'
+      + '<tbody id="lrows-' + esc(a) + '"></tbody></table></div>'
+      + '<div class="nolink' + (d.state === 'init' ? ' show' : '') + '" id="lnolink-' + esc(a) + '">no link (bus: ' + esc(d.state || '?') + ' — stream appears after configure/open)</div>'
+      + '</section>');
+    const btn = $('lbtn-' + a); if (btn) btn.addEventListener('click', () => toggleLivePause(a));
+    const inp = $('lrlim-' + a);
+    if (inp) inp.addEventListener('change', () => setMaxRows(a, parseInt(inp.value, 10)));
+    const op = $('lopen-' + a); if (op) op.addEventListener('click', () => txOpenDevice(a));
+    const sd = $('txsend-' + a); if (sd) sd.addEventListener('click', () => txFromInputs(a));
+    const sv = $('txsave-' + a); if (sv) sv.addEventListener('click', () => txAddPreset(a));
+    ['txid', 'txdata'].forEach((k) => {
+      const el = $(k + '-' + a);
+      if (el) el.addEventListener('keydown', (e) => { if (e.key === 'Enter') txFromInputs(a); });
+    });
+    if (!state.live[a]) state.live[a] = { rows: [], total: 0, unique: new Set(), fps: [], paused: false, dirty: false };
+    updateLiveStats(a);
+    renderTxPresets(a);
+    openDevice(a);
+  });
+}
+function renderLiveHighlight(s) {
+  Object.keys(state.live).forEach((a) => {
+    const el = $('live-' + a); if (!el) return;
+    const stInit = !!(s.devices && s.devices[a] && s.devices[a].state === 'init');
+    const active = s.session_state === 'recording' && s.card && (s.card.buses || []).indexOf(a) >= 0;
+    el.classList.toggle('hl', active);
+    const nl = $('lnolink-' + a);
+    if (nl) nl.classList.toggle('show', stInit);
+    const op = $('lopen-' + a);
+    if (op) op.classList.toggle('show', stInit);
+  });
+}
+function renderPhaseBar(s) {
+  const el = $('phasebar'); if (!el) return;
+  const rec = s.session_state === 'recording' && s.phase;
+  const pause = s.session_state === 'paused';
+  if (state._cd) { clearInterval(state._cd.timer); state._cd = null; }
+  if (!rec && !pause) { el.innerHTML = ''; return; }
+  let html = '<div class="phase-box">';
+  if (rec) {
+    const p = s.phase;
+    html += '<span class="rec-dot">●</span>'
+      + '<span class="badge badge-critical">REC</span>'
+      + '<span>Phase: <b>' + esc(p.name) + '</b></span>'
+      + '<span class="muted small">Current: ' + esc(p.test_id) + ' · car=' + esc(p.car) + '</span>'
+      + '<span class="cd" id="cd" title="time left">--s</span>';
+  } else {
+    html += '<span class="badge" style="background:var(--warn);color:#000">PAUSE</span>'
+      + '<span>pause between tests</span><span class="cd" id="cd">--s</span>';
+  }
+  html += '<span class="muted small">cmd during phase — queued until the next card</span></div>';
+  el.innerHTML = html;
+  const target = rec ? (s.phase.until || 0) : ((s.pauseUntil || 0) ? s.pauseUntil : (Date.now() / 1000 + (s.pauseDur || 0)));
+  const kind = rec ? 'rec' : 'pause';
+  const cd = { kind, target, timer: null };
+  state._cd = cd;
+  const tick = () => {
+    const node = $('cd');
+    if (!node) { clearInterval(cd.timer); if (state._cd === cd) state._cd = null; return; }
+    node.textContent = Math.max(0, Math.ceil(target - Date.now() / 1000)) + 's';
+  };
+  tick();
+  cd.timer = setInterval(tick, 1000);
+}
+function refreshLogs() {
+  jreq('/api/logs').then(renderLogs).catch((e) => console.warn('logs:', e));
+}
+function renderLogs(d) {
+  const el = $('logs-body'); if (!el) return;
+  const rootEl = $('logs-root'); if (rootEl) rootEl.textContent = d.root ? ('root: ' + d.root) : '';
+  if (!d.sessions || !d.sessions.length) {
+    el.innerHTML = '<div class="muted small">No sessions yet — data appears after a finished recording.</div>';
+    return;
+  }
+  el.innerHTML = d.sessions.map((s, i) => {
+    const files = s.tests.reduce((n, t) => n + Object.keys(t.files || {}).length, 0);
+    return '<details' + (i === 0 ? ' open' : '') + '>'
+      + '<summary><span class="mono ls-name">' + esc(s.name) + '</span>'
+      + '<span class="muted small">' + s.tests.length + ' test · ' + files + ' file</span></summary>'
+      + '<table class="log-table"><thead><tr><th>test</th><th>files</th></tr></thead><tbody>'
+      + s.tests.map((t) =>
+        '<tr><td class="mono">' + esc(t.name) + '</td><td>'
+        + Object.entries(t.files || {}).map(([fn, sz]) =>
+            '<a class="file-link" href="#" data-rel="' + esc(s.name + '/' + t.name + '/' + fn) + '">' + esc(fn) + '</a>'
+            + '<span class="muted small">' + fmtSize(sz) + '</span>'
+            + '<a class="dl" href="/api/logs/file?path=' + encodeURIComponent(s.name + '/' + t.name + '/' + fn) + '&amp;dl=1" title="Download">⬇</a>'
+          ).join(' ')
+        + '</td></tr>'
+      ).join('')
+      + '</tbody></table></details>';
+  }).join('');
+  el.querySelectorAll('.file-link').forEach((a) => a.addEventListener('click', (ev) => {
+    ev.preventDefault();
+    openFile(a.dataset.rel);
+  }));
+}
+function openFile(rel) {
+  const m = $('modal'); const body = $('modal-body');
+  body.classList.remove('critical');
+  $('modal-title').textContent = rel;
+  body.textContent = 'Loading…';
+  m.classList.add('open');
+  fetch('/api/logs/file?path=' + encodeURIComponent(rel)).then(async (r) => {
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    body.textContent = await r.text();
+  }).catch((e) => {
+    body.classList.add('critical');
+    body.textContent = 'Load error: ' + e.message;
+  });
+}
+async function init() {
+  try {
+    const lst = await jreq('/api/scenario');
+    state.scenarios = lst.scenarios || [];
+    state.scenName = '';   // dropdown default: empty placeholder; scenarios load on select / session
+    state.scen = null;
+  } catch (e) { console.warn('scenarios:', e); }
+  try { state.ses = await jreq('/api/session/status'); } catch (e) { console.warn('status:', e); }
+  if (state.ses && (state.ses.plan || []).length && state.ses.summary && state.ses.summary.scenario && state.ses.summary.scenario !== state.scenName)
+    loadScenario(state.ses.summary.scenario);   // steps from the last session's scenario
+  buildLivePanes();
+  renderAll(state.ses);
+  refreshLogs();
+  openStream();
+  $('logs-refresh').addEventListener('click', () => refreshLogs());
+  const mc = $('modal-close');
+  if (mc) mc.addEventListener('click', () => $('modal').classList.remove('open'));
+  $('modal').addEventListener('click', (e) => { if (e.target === $('modal')) $('modal').classList.remove('open'); });
+  state.tickT = setInterval(() => Object.keys(state.live).forEach((a) => updateLiveStats(a)), 1000);
+  setInterval(() => { if (!document.hidden) sync(); }, 5000);   // foreground rsync (topbar chip rx counters)
+  setInterval(() => { if (document.hidden) sync(); }, 10000);   // background rsync
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) sync(); });
+}
+init();
+</script>
+</html>

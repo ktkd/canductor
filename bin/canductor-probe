@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# canductor-probe — self-test of the adapter pair (echo/cross-link, no ECU).
+# Checks: fixed A→B, fixed B→A, variable A→B, 125 kbit/s A→B.
+# Usage: ./canductor-probe            (ttyUSB0 → ttyUSB1)
+#                ./canductor-probe A B [--rate 125000]
+set -euo pipefail
+DEVA="${1:-/dev/ttyUSB0}"
+DEVB="${2:-/dev/ttyUSB1}"
+shift $(( $# > 0 ? 2 : $# )) || true
+exec python3 -m canductor probe "$DEVA" "$DEVB" "$@"

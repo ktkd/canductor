@@ -1,0 +1,1552 @@
+{
+ "name": "mazda_swap_hs",
+ "title": "CAN data collection: rx8/mx5",
+ "version": "1.0",
+ "cars": {
+  "rx8": {
+   "label": "Mazda RX-8 2008 (13B-MSP)"
+  },
+  "nd": {
+   "label": "Mazda MX-5 ND 2019"
+  }
+ },
+ "buses": {
+  "hs": {
+   "label": "HS-CAN 500 kbit/s",
+   "can_baud": 500000,
+   "std_only": true,
+   "point": "OBD-II: pin 6 (CAN_H), pin 14 (CAN_L) — main bus of both vehicles"
+  },
+  "ms": {
+   "label": "MS-CAN 125 kbit/s",
+   "can_baud": 125000,
+   "std_only": true,
+   "point": "RX-8: OBD-II (confirm with diagram); ND: BCM pins 2F/2H — HVAC and body (chassis)"
+  }
+ },
+ "rules": {
+  "quiet_s": 5,
+  "after_s": 5,
+  "repeats": 3,
+  "pause_s": 10,
+  "action_min_s": 5,
+  "action_max_s": 15,
+  "state_max_s": 120
+ },
+ "warnings": [
+  "Immobilizer MX-5 ND — without bypass/emulation, the engine will not start (critical).",
+  "EPS — in the swap RE, EPS was not working: need to emulate the PCM signal or replace with hydraulic (critical).",
+  "ABS/DSC — if the PCM signal is absent, they may be disabled: need to emulate torque (critical).",
+  "RX-8 Series 1 (manual transmission) — via OBD-II, high rev limit is possible: disable OBD channels.",
+  "Start/Stop Unit MX-5 ND — will not start without emulating the stock PCM: this is an independent authentication loop."
+ ],
+ "known_ids": {
+  "rx8": [
+   {
+    "id": "0x201",
+    "params": [
+     {
+      "name": "RPM",
+      "bytes": "0-1 (BE)",
+      "formula": "UINT16 * 0.25"
+     },
+     {
+      "name": "Vehicle speed",
+      "bytes": "4-5",
+      "formula": "UINT16 / 100"
+     },
+     {
+      "name": "TPS (accelerator)",
+      "bytes": "6",
+      "formula": "UINT8 / 2"
+     }
+    ]
+   },
+   {
+    "id": "0x212",
+    "params": [
+     {
+      "name": "Brake",
+      "bytes": "5, 0x08",
+      "formula": "Bool"
+     },
+     {
+      "name": "Handbrake",
+      "bytes": "4, 0x40",
+      "formula": "Bool"
+     }
+    ]
+   },
+   {
+    "id": "0x231",
+    "params": [
+     {
+      "name": "Neutral",
+      "bytes": "0, 0x80",
+      "formula": "~Bool"
+     }
+    ]
+   },
+   {
+    "id": "0x300",
+    "params": [
+     {
+      "name": "Steering Warning Light",
+      "bytes": "—",
+      "formula": "Controlled"
+     }
+    ]
+   },
+   {
+    "id": "0x420",
+    "params": [
+     {
+      "name": "Coolant temperature",
+      "bytes": "0",
+      "formula": "UINT8 - 40"
+     },
+     {
+      "name": "Fuel level",
+      "bytes": "0-1",
+      "formula": "confirm"
+     }
+    ]
+   },
+   {
+    "id": "0x4B0",
+    "params": [
+     {
+      "name": "Wheel speeds (4)",
+      "bytes": "0,2,4,6",
+      "formula": "UINT16 / 100 - 100"
+     }
+    ]
+   }
+  ],
+  "nd": [
+   {
+    "id": "0x202",
+    "params": [
+     {
+      "name": "RPM",
+      "bytes": "0-1",
+      "formula": "UINT16 / 4"
+     },
+     {
+      "name": "Vehicle speed",
+      "bytes": "2-3",
+      "formula": "INT16 / 360"
+     },
+     {
+      "name": "Accelerator",
+      "bytes": "6",
+      "formula": "UINT8 / 2.5"
+     }
+    ]
+   },
+   {
+    "id": "0x78",
+    "params": [
+     {
+      "name": "Brake",
+      "bytes": "6",
+      "formula": "min(max(E+if(E<=146,255,0)-156,0)/2.34,100)"
+     }
+    ]
+   },
+   {
+    "id": "0x86",
+    "params": [
+     {
+      "name": "Steering angle",
+      "bytes": "0-1",
+      "formula": "(16000 - UINT16) x 0.1"
+     }
+    ]
+   },
+   {
+    "id": "0x09A",
+    "params": [
+     {
+      "name": "Lighting state",
+      "bytes": "0",
+      "formula": "confirm"
+     }
+    ]
+   },
+   {
+    "id": "0x165",
+    "params": [
+     {
+      "name": "Gear state",
+      "bytes": "13-14",
+      "formula": "confirm"
+     }
+    ]
+   },
+   {
+    "id": "0x720",
+    "params": [
+     {
+      "name": "Instrument cluster (diagnostics)",
+      "bytes": "—",
+      "formula": "—"
+     }
+    ]
+   },
+   {
+    "id": "0x40A",
+    "params": [
+     {
+      "name": "",
+      "bytes": "",
+      "formula": ""
+     }
+    ]
+   }
+  ]
+ },
+ "stages": [
+  {
+   "id": "0",
+   "title": "Equipment preparation and basic configuration",
+   "checklist": [
+    "Connect HS-CAN: OBD-II pin 6 (CAN_H), pin 14 (CAN_L) -> /dev/ttyUSB0",
+    "Connect MS-CAN: RX-8 — OBD-II (MS channel), ND — BCM pins 2F/2H -> /dev/ttyUSB1",
+    "HS-CAN = 500 kbit/s (std, 11-bit ID); MS-CAN = 125 kbit/s",
+    "Rules: 5 seconds silence -> action 5-10 seconds -> 5 seconds after; each test x3; pause >=10 seconds; ABS/DSC — closed lot only"
+   ],
+   "tests": []
+  },
+  {
+   "id": "1",
+   "title": "Passive listening: basic states",
+   "warn": "Record background traffic and identify the list of active CAN IDs for each state.",
+   "tests": [
+    {
+     "id": "1.1.1",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "state",
+     "title": "Ignition off, all blocks de-energized",
+     "do": "Control signals (if any)",
+     "duration": 30,
+     "file": "off",
+     "tx": []
+    },
+    {
+     "id": "1.1.2",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "state",
+     "title": "Ignition on, engine not started",
+     "do": "Immobilizer, dashboard, EPS, ABS",
+     "duration": 60,
+     "file": "ign_on",
+     "tx": []
+    },
+    {
+     "id": "1.1.3",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "state",
+     "title": "Engine idling (warm)",
+     "do": "PCM: RPM, temperature, fuel, load",
+     "duration": 120,
+     "file": "idle",
+     "tx": []
+    },
+    {
+     "id": "1.1.4",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "state",
+     "title": "Engine stopped, ignition off",
+     "do": "Completion signals",
+     "duration": 30,
+     "file": "shutdown",
+     "tx": []
+    }
+   ]
+  },
+  {
+   "id": "2",
+   "title": "Targeted tests: engine and transmission",
+   "warn": "",
+   "tests": [
+    {
+     "id": "2.1.1",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Smooth press 0→25%",
+     "do": "Smoothly bring the accelerator pedal up to 25%",
+     "duration": 10,
+     "file": "accel_25",
+     "checks": [
+      "0x201",
+      "0x202"
+     ]
+    },
+    {
+     "id": "2.1.2",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Hold 25%",
+     "do": "Hold 25%",
+     "duration": 5,
+     "file": "accel_hold25",
+     "checks": [
+      "0x201",
+      "0x202"
+     ]
+    },
+    {
+     "id": "2.1.3",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Smooth press 25→50%",
+     "do": "Smoothly bring it up to 50%",
+     "duration": 10,
+     "file": "accel_50",
+     "checks": [
+      "0x201",
+      "0x202"
+     ]
+    },
+    {
+     "id": "2.1.4",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Hold 50%",
+     "do": "Hold 50%",
+     "duration": 5,
+     "file": "accel_hold50",
+     "checks": [
+      "0x201",
+      "0x202"
+     ]
+    },
+    {
+     "id": "2.1.5",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Sharp press 0→100%",
+     "do": "Snap the pedal to the floor",
+     "duration": 5,
+     "file": "accel_wot",
+     "checks": [
+      "0x201",
+      "0x202"
+     ]
+    },
+    {
+     "id": "2.1.6",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Smooth release 100→0%",
+     "do": "Smoothly release the pedal",
+     "duration": 10,
+     "file": "accel_release",
+     "checks": [
+      "0x201",
+      "0x202"
+     ]
+    },
+    {
+     "id": "2.2.1",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "state",
+     "title": "Idle (warmed up)",
+     "do": "Record the average value",
+     "duration": 60,
+     "file": "rpm_idle",
+     "checks": [
+      "0x201",
+      "0x202"
+     ]
+    },
+    {
+     "id": "2.2.2",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Smooth ramp-up to 2000 rpm",
+     "do": "Smoothly raise to 2000 rpm and hold",
+     "duration": 10,
+     "file": "rpm_2000",
+     "checks": [
+      "0x201",
+      "0x202"
+     ]
+    },
+    {
+     "id": "2.2.3",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Smooth ramp-up to 3000 rpm",
+     "do": "Smoothly raise to 3000 rpm and hold",
+     "duration": 10,
+     "file": "rpm_3000",
+     "checks": [
+      "0x201",
+      "0x202"
+     ]
+    },
+    {
+     "id": "2.2.4",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Smooth ramp-up to 5000 rpm",
+     "do": "Smoothly raise to 5000 rpm and hold",
+     "duration": 10,
+     "file": "rpm_5000",
+     "checks": [
+      "0x201",
+      "0x202"
+     ]
+    },
+    {
+     "id": "2.2.5",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Sharp drop to idle",
+     "do": "Release the pedal — drop back to idle",
+     "duration": 10,
+     "file": "rpm_drop",
+     "checks": [
+      "0x201",
+      "0x202"
+     ]
+    },
+    {
+     "id": "2.2.6",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Blip (if safe)",
+     "do": "Briefly, warmed-up engine only",
+     "duration": 5,
+     "file": "rpm_cut",
+     "checks": [
+      "0x201",
+      "0x202"
+     ]
+    },
+    {
+     "id": "2.3.1",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Neutral → 1st gear",
+     "duration": 10,
+     "file": "gear_n1",
+     "checks": [
+      "0x231",
+      "0x165"
+     ]
+    },
+    {
+     "id": "2.3.2",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "1st → 2nd gear",
+     "duration": 10,
+     "file": "gear_12",
+     "checks": [
+      "0x231",
+      "0x165"
+     ]
+    },
+    {
+     "id": "2.3.3",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "2nd → 3rd gear",
+     "duration": 10,
+     "file": "gear_23",
+     "checks": [
+      "0x231",
+      "0x165"
+     ]
+    },
+    {
+     "id": "2.3.4",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "3rd → neutral",
+     "duration": 10,
+     "file": "gear_3n",
+     "checks": [
+      "0x231",
+      "0x165"
+     ]
+    },
+    {
+     "id": "2.4.1",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "state",
+     "title": "Cold start",
+     "do": "Full warm-up cycle to 90°C — duration as measured (max 15 min)",
+     "duration": 900,
+     "file": "coolant_warmup",
+     "checks": [
+      "0x420"
+     ]
+    },
+    {
+     "id": "2.4.2",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "state",
+     "title": "Stable operating temperature",
+     "duration": 60,
+     "file": "coolant_stable",
+     "checks": [
+      "0x420"
+     ]
+    },
+    {
+     "id": "2.4.3",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "state",
+     "title": "Cooling after shutoff",
+     "do": "5 minutes after shutoff",
+     "duration": 300,
+     "file": "coolant_cooldown",
+     "checks": [
+      "0x420"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "3",
+   "title": "Braking system and ABS/DSC",
+   "warn": "Closed lot only. Do not continue on public roads!",
+   "tests": [
+    {
+     "id": "3.1.1",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Brake pedal press (light)",
+     "duration": 10,
+     "file": "brake_light",
+     "checks": [
+      "0x212",
+      "0x78"
+     ]
+    },
+    {
+     "id": "3.1.2",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Brake pedal press (heavy)",
+     "duration": 10,
+     "file": "brake_hard",
+     "checks": [
+      "0x212",
+      "0x78"
+     ]
+    },
+    {
+     "id": "3.1.3",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Brake hold",
+     "duration": 5,
+     "file": "brake_hold",
+     "checks": [
+      "0x212",
+      "0x78"
+     ]
+    },
+    {
+     "id": "3.1.4",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Handbrake up",
+     "duration": 10,
+     "file": "handbrake_up",
+     "checks": [
+      "0x212"
+     ]
+    },
+    {
+     "id": "3.1.5",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Handbrake down",
+     "duration": 10,
+     "file": "handbrake_down",
+     "checks": [
+      "0x212"
+     ]
+    },
+    {
+     "id": "3.1.6",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "DSC/TCS off (button)",
+     "duration": 10,
+     "file": "dsc_off",
+     "checks": [
+      "0x212"
+     ]
+    },
+    {
+     "id": "3.1.7",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Hard braking (ABS)",
+     "duration": 10,
+     "file": "abs_event",
+     "checks": [
+      "0x212",
+      "0x78"
+     ],
+     "warn": "Closed lot only"
+    }
+   ]
+  },
+  {
+   "id": "4",
+   "title": "Steering and directional stability",
+   "warn": "",
+   "tests": [
+    {
+     "id": "4.1.1",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Steer 45° to the left",
+     "duration": 10,
+     "file": "steer_left45",
+     "checks": [
+      "0x86",
+      "0x300"
+     ]
+    },
+    {
+     "id": "4.1.2",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Steer 45° to the right",
+     "duration": 10,
+     "file": "steer_right45",
+     "checks": [
+      "0x86",
+      "0x300"
+     ]
+    },
+    {
+     "id": "4.1.3",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Full lock to the left",
+     "duration": 10,
+     "file": "steer_left_full",
+     "checks": [
+      "0x86",
+      "0x300"
+     ]
+    },
+    {
+     "id": "4.1.4",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Full lock to the right",
+     "duration": 10,
+     "file": "steer_right_full",
+     "checks": [
+      "0x86",
+      "0x300"
+     ]
+    },
+    {
+     "id": "4.1.5",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Fast steering input",
+     "duration": 10,
+     "file": "steer_fast",
+     "checks": [
+      "0x86",
+      "0x300"
+     ]
+    },
+    {
+     "id": "4.1.6",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Straight-line driving",
+     "duration": 30,
+     "file": "steer_straight",
+     "checks": [
+      "0x86",
+      "0x300"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "5",
+   "title": "Body electronics and comfort",
+   "warn": "ND: 0x09A — lighting state. Turn-signal/door/washer IDs to be confirmed via state comparison. Part of the ND chassis electronics is on MS-CAN (BCM 2f/2h).",
+   "tests": [
+    {
+     "id": "5.1.1",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Turn signals (left): on/off",
+     "duration": 10,
+     "file": "turn_left",
+     "checks": [
+      "0x09A"
+     ]
+    },
+    {
+     "id": "5.1.2",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Turn signals (right): on/off",
+     "duration": 10,
+     "file": "turn_right",
+     "checks": [
+      "0x09A"
+     ]
+    },
+    {
+     "id": "5.1.3",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Hazard lights: on",
+     "duration": 10,
+     "file": "hazard",
+     "checks": [
+      "0x09A"
+     ]
+    },
+    {
+     "id": "5.1.4",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Position lights: on/off",
+     "duration": 10,
+     "file": "parking_lights",
+     "checks": [
+      "0x09A"
+     ]
+    },
+    {
+     "id": "5.1.5",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Low beam: on/off",
+     "duration": 10,
+     "file": "low_beam",
+     "checks": [
+      "0x09A"
+     ]
+    },
+    {
+     "id": "5.1.6",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "High beam: on/off",
+     "duration": 10,
+     "file": "high_beam",
+     "checks": [
+      "0x09A"
+     ]
+    },
+    {
+     "id": "5.1.7",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "High-beam flash",
+     "duration": 10,
+     "file": "flash",
+     "checks": [
+      "0x09A"
+     ]
+    },
+    {
+     "id": "5.1.8",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Windshield wipers (intermittent)",
+     "duration": 10,
+     "file": "wiper_int",
+     "checks": []
+    },
+    {
+     "id": "5.1.9",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Windshield wipers (continuous)",
+     "duration": 10,
+     "file": "wiper_cont",
+     "checks": []
+    },
+    {
+     "id": "5.1.10",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Windshield washer",
+     "duration": 10,
+     "file": "washer",
+     "checks": []
+    },
+    {
+     "id": "5.1.11",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Driver door: open/close",
+     "duration": 10,
+     "file": "door_driver",
+     "checks": []
+    },
+    {
+     "id": "5.1.12",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Passenger door: open/close",
+     "duration": 10,
+     "file": "door_passenger",
+     "checks": []
+    },
+    {
+     "id": "5.1.13",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Trunk: open/close",
+     "duration": 10,
+     "file": "trunk",
+     "checks": []
+    },
+    {
+     "id": "5.1.14",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Driver power window",
+     "duration": 10,
+     "file": "window_driver",
+     "checks": []
+    },
+    {
+     "id": "5.1.15",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Passenger power window",
+     "duration": 10,
+     "file": "window_passenger",
+     "checks": []
+    }
+   ]
+  },
+  {
+   "id": "6",
+   "title": "HVAC (MS-CAN)",
+   "warn": "The HVAC is on MS-CAN (125 kbit/s), not on HS-CAN! RX-8: HVAC on MS-CAN via OBD-II. ND: HVAC on MS-CAN via BCM (pins 2F and 2H). All tests in this stage — with MS-CAN recording.",
+   "tests": [
+    {
+     "id": "6.1.1",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "A/C on/off",
+     "duration": 10,
+     "file": "ms_ac",
+     "checks": []
+    },
+    {
+     "id": "6.1.2",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Temperature change (max→min)",
+     "duration": 30,
+     "file": "ms_temp",
+     "checks": []
+    },
+    {
+     "id": "6.1.3",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Fan speed change (1→max)",
+     "duration": 30,
+     "file": "ms_fan",
+     "checks": []
+    },
+    {
+     "id": "6.1.4",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Airflow mode change (windshield→feet)",
+     "duration": 30,
+     "file": "ms_mode",
+     "checks": []
+    },
+    {
+     "id": "6.1.5",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Rear-window defrost on/off",
+     "duration": 10,
+     "file": "ms_rear_defrost",
+     "checks": []
+    },
+    {
+     "id": "6.1.6",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Seat heater on/off",
+     "duration": 10,
+     "file": "ms_seat_heat",
+     "checks": []
+    },
+    {
+     "id": "6.1.7",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Air recirculation (on/off)",
+     "duration": 10,
+     "file": "ms_recirc",
+     "checks": []
+    }
+   ]
+  },
+  {
+   "id": "7",
+   "title": "Instrument panel and indicators",
+   "warn": "RX-8: 0x420 — coolant temperature, oil pressure, coolant level, battery, Check Engine; 0x212 — ABS, DSC, brake. MX-5 ND: indicator IDs to be confirmed (likely 0x720).",
+   "tests": [
+    {
+     "id": "7.1.1",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "state",
+     "title": "Monitor the Check Engine indicator",
+     "duration": 60,
+     "file": "ind_cel",
+     "checks": []
+    },
+    {
+     "id": "7.1.2",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "state",
+     "title": "Monitor the ABS indicator",
+     "duration": 60,
+     "file": "ind_abs",
+     "checks": []
+    },
+    {
+     "id": "7.1.3",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "state",
+     "title": "Monitor the DSC/TCS indicator",
+     "duration": 60,
+     "file": "ind_dsc",
+     "checks": []
+    },
+    {
+     "id": "7.1.4",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "state",
+     "title": "Monitor the brake system indicator",
+     "duration": 60,
+     "file": "ind_brake",
+     "checks": []
+    },
+    {
+     "id": "7.1.5",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "state",
+     "title": "Monitor the seatbelt indicator",
+     "duration": 60,
+     "file": "ind_seatbelt",
+     "checks": []
+    },
+    {
+     "id": "7.1.6",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "state",
+     "title": "Monitor the airbag indicator",
+     "duration": 60,
+     "file": "ind_airbag",
+     "checks": []
+    },
+    {
+     "id": "7.1.7",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "state",
+     "title": "Monitor the fuel level (at various levels)",
+     "duration": 120,
+     "file": "ind_fuel",
+     "checks": []
+    },
+    {
+     "id": "7.1.8",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "state",
+     "title": "Monitor the engine temperature needle (during warm-up)",
+     "duration": 300,
+     "file": "ind_temp",
+     "checks": []
+    },
+    {
+     "id": "7.1.9",
+     "car": [
+      "rx8",
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "state",
+     "title": "Monitor the oil pressure (ignition on/off)",
+     "duration": 120,
+     "file": "ind_oil",
+     "checks": []
+    }
+   ]
+  },
+  {
+   "id": "8",
+   "title": "PCM-off method (MX-5 ND only)",
+   "warn": "Disconnecting the stock PCM of the MX-5 ND — only with the ignition off and the battery terminal unclamped. After the test — restore the connection.",
+   "checklist": [
+    "Goal: determine which CAN IDs the stock PCM of the MX-5 ND generates, which the RX-8 ECU cannot provide.",
+    "1) Physically disconnect the stock PCM (unplug its connector).",
+    "2) Turn the ignition on (the engine will not start).",
+    "3) Record the CAN traffic (test 8.1.1).",
+    "4) Compare with the stage 1.2 log. The IDs absent with the PCM disconnected are the PCM messages — the gateway must emulate them.",
+    "Critical for emulation: 0x202 (RPM/speed/accelerator), 0x78 (brake), EPS (critical), immobilizer (critical)."
+   ],
+   "tests": [
+    {
+     "id": "8.1.1",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "state",
+     "title": "Recording: PCM off, ignition on",
+     "do": "PCM unplugged, ignition on, engine not started",
+     "duration": 60,
+     "file": "nd_pcm_off",
+     "checks": [
+      "0x202",
+      "0x78",
+      "0x09A",
+      "0x165",
+      "0x86"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "9",
+   "title": "Stress-test method (MX-5 ND only)",
+   "warn": "",
+   "checklist": [
+    "Goal: find the PCM's 'service' messages that change when errors occur.",
+    "1) Connect to the bus and start recording.",
+    "2) Temporarily disconnect one of the modules (e.g. DSC or the ABS sensor).",
+    "3) Record the traffic (test 9.1.1).",
+    "4) Compare with the reference log: messages that appear/change on disconnection are diagnostic or service messages: block them, or pass them through in a compatible format."
+   ],
+   "tests": [
+    {
+     "id": "9.1.1",
+     "car": [
+      "nd"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "state",
+     "title": "Stress: module disconnected, traffic recording",
+     "duration": 60,
+     "file": "nd_stress",
+     "checks": []
+    }
+   ]
+  },
+  {
+   "id": "10",
+   "title": "RX-8 ECU isolated testing (bench)",
+   "warn": "BENCH. The RX-8 ECU is connected to the CAN bus with bench power. Goal: understand which messages the ECU expects from other modules to enter operating mode.",
+   "checklist": [
+    "1) Connect the RX-8 ECU to the powered CAN bus on the bench.",
+    "2) Record all messages the ECU sends on power-on (test 10.1.1).",
+    "3) Feed 'fake' replies: emulate the immobilizer, DSC/ABS and instrument-panel responses (test 10.1.2, manually via `canductor link ... --send`).",
+    "4) Pin down which replies are required to reach 'ready to start' (test 10.1.3) → a list of incoming CAN IDs + data."
+   ],
+   "tests": [
+    {
+     "id": "10.1.1",
+     "car": [
+      "rx8"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "state",
+     "title": "Logs: ECU power-on (no replies)",
+     "do": "Power on and record the boot messages",
+     "duration": 60,
+     "file": "bench_ecu_on",
+     "checks": []
+    },
+    {
+     "id": "10.1.2",
+     "car": [
+      "rx8"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "action",
+     "title": "Emulated replies (immobilizer/DSC/panel)",
+     "do": "Manually via canductor link: reply to the requests seen in 10.1.1; continue until the 'ready' state",
+     "duration": 300,
+     "file": "bench_ecu_answers",
+     "checks": []
+    },
+    {
+     "id": "10.1.3",
+     "car": [
+      "rx8"
+     ],
+     "bus": [
+      "hs"
+     ],
+     "kind": "state",
+     "title": "Logs: ECU 'ready to start'",
+     "duration": 60,
+     "file": "bench_ecu_ready",
+     "checks": []
+    }
+   ]
+  },
+  {
+   "id": "11",
+   "title": "Mapping table (for the gateway)",
+   "warn": "Table format: Parameter | Source (RX-8) | Receiver (ND) | Gateway action.",
+   "checklist": [
+    "RPM: RX-8 0x201 bytes 0-1 UINT16×0.25 → ND 0x202 bytes 0-1 UINT16/4 — receive → recalculate → send",
+    "Vehicle speed: 0x201 bytes 4-5 UINT16/100 → 0x202 bytes 2-3 INT16/360",
+    "Accelerator: 0x201 byte 6 UINT8/2 → 0x202 byte 6 UINT8/2.5",
+    "Brake: 0x212 byte 5 mask 0x08 → 0x78 (complex formula) — pass the bit state through",
+    "Handbrake: 0x212 byte 4 mask 0x40 → confirm the ID",
+    "Neutral: 0x231 byte 0 mask 0x80 → 0x165 (position)",
+    "Coolant temperature: 0x420 byte 0 −40 → confirm",
+    "Steering angle: confirm the ID → 0x86 (16000−UINT16)×0.1",
+    "Immobilizer: none → expects the PCM SYNC code — EMULATE",
+    "EPS: RX-8 ECU sends signal → ND expects PCM signal — emulate or disable",
+    "ABS/DSC: RX-8 does not control ND DSC → expects torque signal — EMULATE"
+   ],
+   "tests": []
+  },
+  {
+   "id": "12",
+   "title": "Verification and documentation",
+   "warn": "",
+   "checklist": [
+    "Repeat all tests 3 times (reproducibility).",
+    "Compare with the existing DBCs: rnd-ash/rx8-reverse-engineering (rx8.dbc), topolittle/RX8-CAN-BUS (PID RaceChrono), RaceChrono DBC for the MX-5 ND.",
+    "Document the anomalies: messages that appear irregularly and do not correlate with the actions.",
+    "Create the final DBC for each platform based on the collected data.",
+    "Specification: a 'CAN ID → byte → bit → physical quantity → formula' table, stating the state in which each signal is active."
+   ],
+   "tests": []
+  }
+ ]
+}

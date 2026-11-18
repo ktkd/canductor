@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# canductor-bench — fast run of the bench scenario (echo pair, no car).
+# Checks the mechanics: registry, reconfigure 500k→125k, variable encoding, TX inject.
+# Usage:  ./canductor-bench                 # auto, 1 repeat, scale 0.4
+#                ./canductor-bench --repeats 2 --scale 0.7
+set -euo pipefail
+DEV_HS="${DEV_HS:-/dev/ttyUSB0}"
+DEV_MS="${DEV_MS:-/dev/ttyUSB1}"
+OUT="${OUT:-./logs}"
+if [[ $# -eq 0 ]]; then
+  exec python3 -m canductor run \
+       -s bench_quick --auto --repeats 1 --scale 0.4 \
+       --dev "hs=${DEV_HS}" --dev "ms=${DEV_MS}" -o "$OUT"
+fi
+exec python3 -m canductor run -s bench_quick \
+     --dev "hs=${DEV_HS}" --dev "ms=${DEV_MS}" -o "$OUT" "$@"

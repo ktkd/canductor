@@ -1,0 +1,246 @@
+# CI for canductor (https://github.com/ktkd/canductor)
+#
+# conda is set up with conda-incubator/setup-miniconda@v4 (this runner cannot
+# resolve other conda setup actions), following the action's "Example 6: Mamba"
+# pattern from its docs:
+#   * channels "conda-forge,defaults" with channel-priority: true
+#   * the env is fixed by name via environment-file (.github/env/*.yml)
+#   * activate-environment pins which env the action writes into the shell
+#     profiles -> every following step runs as a login shell (bash -el)
+#   * the python version comes from the python-version input
+#   * tool packages (build, selenium, twine) are pip-installed in the jobs -
+#     the conda env file only carries python+pip, so the conda solve is
+#     trivial and independent of channel naming quirks
+#
+# Jobs
+#   test    - unit tests (tests/test_protocol.py) + CLI smoke, Python 3.10-3.14
+#             matrix (matrix green = push)
+#   build   - sdist + wheel (web/index.html verified inside), uploaded as
+#             the `dist` artifact
+#   e2e     - web UI end-to-end (tests/e2e_ui.py) via the Selenium grid
+#             container; in-process core, no USB hardware, scenarios from
+#             scenarios/ in this repo
+#   publish - PyPI release, tags `v*` only (needs `PYPI_API_TOKEN` secret)
+name: python-package-conda
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ "v*" ]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (py${{ matrix.python }})
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash -el {0}
+    strategy:
+      fail-fast: false
+      matrix:
+        python: [ "3.10", "3.11", "3.12", "3.13", "3.14" ]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - uses: conda-incubator/setup-miniconda@v4
+        with:
+          python-version: ${{ matrix.python }}
+          mamba-version: "*"
+          use-mamba: true
+          channels: conda-forge,defaults
+          channel-priority: true
+          environment-file: .github/env/ci.yml
+          activate-environment: ci
+
+      - name: Install the package
+        run: |
+          python -V | grep -q "${{ matrix.python }}" || { printenv | sort; conda env list; exit 1; }
+          mamba --version
+          python -m pip install .
+          canductor --version
+
+      - name: Tests (protocol golden vectors, in-process service, SSE streams)
+        run: python tests/test_protocol.py
+
+      - name: CLI smoke (no USB hardware in CI)
+        run: |
+          canductor devices
+          # dry-run plan: in-process core, no real devices
+          # (scenario by cwd-relative path: an installed package would not
+          #  find scenarios/ next to site-packages)
+          canductor run -s scenarios/bench_quick.json --dry-run \
+            --dev hs=/dev/null --dev ms=/dev/null
+
+  build:
+    name: build dist
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - uses: conda-incubator/setup-miniconda@v4
+        with:
+          python-version: "3.12"
+          mamba-version: "*"
+          use-mamba: true
+          channels: conda-forge,defaults
+          channel-priority: true
+          environment-file: .github/env/ci-build.yml
+          activate-environment: ci-build
+
+      - name: Package (sdist + wheel, verify web/index.html is inside)
+        run: |
+          python -V | grep -q "3.12" || { printenv | sort; conda env list; exit 1; }
+          mamba --version
+          # NOTE: --no-isolation is deliberate. python -m build bootstraps
+          # its env via `pip --python <venv>`; the conda-provided pip then
+          # crashes resolving CA certs (truststore -> certifi.where() ->
+          # FileNotFoundError) inside that isolated venv. Installing the
+          # build backend (pyproject: setuptools>=68) into the active env
+          # and building without isolation avoids it and is reproducible.
+          python -m pip install build "setuptools>=68"
+          python -m build --no-isolation
+          ls dist
+          python - <<'EOF'
+          import glob, zipfile
+          whl = glob.glob("dist/*.whl")[0]
+          names = zipfile.ZipFile(whl).namelist()
+          assert any(n.endswith("canductor/web/index.html") for n in names), \
+              "web/index.html missing from the wheel"
+          print("wheel ok:", whl)
+          EOF
+
+      - name: Upload dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 14
+
+  e2e:
+    name: e2e web UI (selenium)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash -el {0}
+    env:
+      # no trailing slash: the client appends /session, a trailing / would
+      # make it //session and the grid would reject it
+      SE_HOST: http://localhost:4444
+      PAGE_URL: http://host.docker.internal:8111
+      LOCAL_URL: http://127.0.0.1:8111
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - uses: conda-incubator/setup-miniconda@v4
+        with:
+          python-version: "3.12"
+          mamba-version: "*"
+          use-mamba: true
+          channels: conda-forge,defaults
+          channel-priority: true
+          environment-file: .github/env/ci-e2e.yml
+          activate-environment: ci-e2e
+
+      - name: Install the package + selenium client
+        run: |
+          python -V | grep -q "3.12" || { printenv | sort; conda env list; exit 1; }
+          mamba --version
+          python -m pip install selenium .
+          canductor --version
+
+      - name: Start Selenium grid
+        run: |
+          docker run -d --name selenium-grid \
+            -p 4444:4444 \
+            --add-host=host.docker.internal:host-gateway \
+            -e SE_CB=false \
+            selenium/standalone-chrome:153.0
+          for i in $(seq 1 60); do
+            curl -fs http://localhost:4444/status > /dev/null && break
+            sleep 2
+          done
+          curl -fs http://localhost:4444/status
+
+      - name: Start the web service (in-process core, no USB hardware)
+        run: |
+          # run from the source tree: an installed package would not find
+          # scenarios/ next to site-packages; the nonexistent device paths
+          # contain "bus" - e2e asserts the session error mentions the bus
+          python -m canductor web --host 0.0.0.0 --port 8111 \
+            --dev hs=/nonexistent/bus-hs --dev ms=/nonexistent/bus-ms \
+            > canductor-web.log 2>&1 &
+          echo $! > canductor-web.pid
+          for i in $(seq 1 30); do
+            curl -fs http://127.0.0.1:8111/api/session/status > /dev/null && break
+            sleep 1
+          done
+          curl -fs http://127.0.0.1:8111/api/session/status
+
+      - name: Run e2e UI test
+        run: python tests/e2e_ui.py
+
+      - name: Stop the web service
+        if: always()
+        run: kill "$(cat canductor-web.pid)" 2> /dev/null || true
+
+      - name: Service log (on failure)
+        if: failure()
+        run: tail -100 canductor-web.log || true
+
+      - name: Grid logs (on failure)
+        if: failure()
+        run: docker logs --tail 200 selenium-grid || true
+
+  publish:
+    name: publish to PyPI
+    needs: [ test, build ]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash -el {0}
+    # environment: pypi          # uncomment if you create a "pypi" deployment
+    #                               (Protection rules) environment in repo settings
+    steps:
+      - name: Download dist artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      - uses: conda-incubator/setup-miniconda@v4
+        with:
+          python-version: "3.12"
+          mamba-version: "*"
+          use-mamba: true
+          channels: conda-forge,defaults
+          channel-priority: true
+          environment-file: .github/env/ci-publish.yml
+          activate-environment: ci-publish
+
+      - name: Upload to PyPI
+        env:
+          PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          mamba --version
+          python -m pip install twine
+          if [ -n "$PYPI_API_TOKEN" ]; then
+            python -m twine upload dist/* -u __token__ -p "$PYPI_API_TOKEN"
+          else
+            echo "PYPI_API_TOKEN is not set - skipping upload"
+          fi
